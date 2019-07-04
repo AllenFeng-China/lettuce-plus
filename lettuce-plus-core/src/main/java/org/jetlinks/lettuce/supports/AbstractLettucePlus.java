@@ -1,4 +1,4 @@
-package org.hswebframework.lettuce.supports;
+package org.jetlinks.lettuce.supports;
 
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.RedisCodec;
@@ -7,7 +7,7 @@ import io.lettuce.core.pubsub.RedisPubSubListener;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import lombok.Getter;
 import lombok.Setter;
-import org.hswebframework.lettuce.*;
+import org.jetlinks.lettuce.*;
 
 import java.time.Duration;
 import java.util.Map;

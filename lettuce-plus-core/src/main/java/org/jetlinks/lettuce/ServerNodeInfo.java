@@ -1,4 +1,4 @@
-package org.hswebframework.lettuce;
+package org.jetlinks.lettuce;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -19,6 +19,10 @@ public class ServerNodeInfo implements Serializable {
     private State state;
 
     private Map<String,Object> properties;
+
+    public ServerNodeInfo(String id){
+        this.id=id;
+    }
 
     public enum State{
         ONLINE,OFFLINE

@@ -1,4 +1,4 @@
-package org.hswebframework.lettuce;
+package org.jetlinks.lettuce;
 
 import java.util.Queue;
 import java.util.concurrent.CompletionStage;

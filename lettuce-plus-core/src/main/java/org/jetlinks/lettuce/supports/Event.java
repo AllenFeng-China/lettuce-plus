@@ -1,4 +1,4 @@
-package org.hswebframework.lettuce.supports;
+package org.jetlinks.lettuce.supports;
 
 import lombok.*;
 
@@ -10,6 +10,8 @@ import java.io.Serializable;
 @NoArgsConstructor
 @AllArgsConstructor(staticName = "of")
 public class Event implements Serializable {
+
+    private String fromServer;
 
     private String eventId;
 

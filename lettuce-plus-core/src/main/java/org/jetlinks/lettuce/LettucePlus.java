@@ -1,4 +1,4 @@
-package org.hswebframework.lettuce;
+package org.jetlinks.lettuce;
 
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.RedisCodec;

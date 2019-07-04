@@ -1,6 +1,6 @@
-package org.hswebframework.lettuce.supports;
+package org.jetlinks.lettuce.supports;
 
-import org.hswebframework.lettuce.RedisTopic;
+import org.jetlinks.lettuce.RedisTopic;
 
 import java.util.List;
 import java.util.concurrent.CompletionStage;

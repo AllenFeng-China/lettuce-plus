@@ -1,10 +1,10 @@
-package org.hswebframework.lettuce.supports;
+package org.jetlinks.lettuce.supports;
 
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import lombok.extern.slf4j.Slf4j;
-import org.hswebframework.lettuce.LettucePlus;
-import org.hswebframework.lettuce.RedisQueue;
+import org.jetlinks.lettuce.LettucePlus;
+import org.jetlinks.lettuce.RedisQueue;
 
 import java.util.List;
 import java.util.concurrent.CompletionStage;

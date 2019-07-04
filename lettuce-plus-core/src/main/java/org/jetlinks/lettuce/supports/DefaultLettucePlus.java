@@ -1,4 +1,4 @@
-package org.hswebframework.lettuce.supports;
+package org.jetlinks.lettuce.supports;
 
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.api.StatefulRedisConnection;
@@ -7,7 +7,8 @@ import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
 import lombok.Getter;
 import lombok.Setter;
-import org.hswebframework.lettuce.LettucePlus;
+import org.jetlinks.lettuce.LettucePlus;
+import org.jetlinks.lettuce.codec.FstCodec;
 
 import java.time.Duration;
 import java.util.List;
@@ -38,7 +39,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
     public static LettucePlus of(RedisClient client) {
         DefaultLettucePlus plus = new DefaultLettucePlus(client);
         plus.setExecutorService(Executors.newScheduledThreadPool(16));
-        plus.setDefaultCodec(StringCodec.UTF8);
+        plus.setDefaultCodec(new FstCodec<>());
         plus.init();
 
         return plus;
