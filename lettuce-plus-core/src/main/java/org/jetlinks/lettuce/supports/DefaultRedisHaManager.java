@@ -1,5 +1,6 @@
 package org.jetlinks.lettuce.supports;
 
+import io.lettuce.core.api.StatefulRedisConnection;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.lettuce.LettucePlus;
@@ -85,7 +86,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
         if (serverId.equals(getCurrentNode().getId())) {
             handleEvent(notify);
         } else {
-            doSend(notify)
+            doSend(serverId, notify)
                     .whenComplete((number, error) -> {
                         if (number != null && number <= 0) {
                             replyMap.remove(notify.getNotifyId());
@@ -100,9 +101,10 @@ public class DefaultRedisHaManager implements RedisHaManager {
         return reply.future;
     }
 
-    public CompletionStage<Long> doSend(Notify notify) {
+    public CompletionStage<Long> doSend(String server, Notify notify) {
 
-        return eventTopic.publish(notify);
+        return plus.getTopic("__ha-manager-notify:".concat(id).concat(":").concat(server))
+                .publish(notify);
     }
 
     @Override
@@ -112,7 +114,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
             handleEvent(notify);
             return CompletableFuture.completedFuture(true);
         }
-        return doSend(notify)
+        return doSend(serverId, notify)
                 .thenApply(number -> number != null && number > 0);
 
     }
@@ -146,17 +148,40 @@ public class DefaultRedisHaManager implements RedisHaManager {
         running = true;
         current.setState(ServerNodeInfo.State.ONLINE);
 
+        plus.getConnection()
+                .thenApply(StatefulRedisConnection::async)
+                .thenAccept(commands -> {
+                    commands.hgetall(((key, value) -> {
+                        if (value instanceof ServerNodeInfo) {
+                            ServerNodeInfo server = ((ServerNodeInfo) value);
+                            if (!server.getId().equals(current.getId())) {
+                                sendNotifyReply(server.getId(), "ping", "pong", Duration.ofSeconds(10))
+                                        .thenAccept(pong -> {
+                                            if ("pong".equals(pong)) {
+                                                allNodeInfo.put(server.getId(), server);
+                                            }
+                                        });
+                            }
+                        } else {
+                            log.warn("ServerNodeInfo data format error:{}={}", key, value);
+                        }
+                    }), "ha-manager:".concat(id));
+                });
+
         this.current = current;
         allNodeInfo.put(this.current.getId(), current);
         onNotify("ping", String.class, (Function<String, CompletionStage<?>>) CompletableFuture::completedFuture);
 
-        this.eventTopic = plus.getTopic("__ha-manager-notify:".concat(id));
-        this.replyTopic = plus.getTopic("__ha-manager-notify-reply:".concat(id));
+        this.eventTopic = plus.getTopic("__ha-manager-notify:".concat(id).concat(":").concat(current.getId()));
+
+        this.replyTopic = plus.getTopic("__ha-manager-notify-reply:".concat(id).concat(":").concat(current.getId()));
         //节点上下线广播
         this.broadcastTopic = plus.getTopic("__ha-manager-broadcast:".concat(id));
         this.broadcastTopic.publish(current);
 
-        this.eventTopic.addListener((topic, notify) -> handleEvent(notify));
+        this.eventTopic.addListener((topic, notify) -> {
+            handleEvent(notify);
+        });
 
         this.replyTopic.addListener((topic, event) ->
                 Optional.ofNullable(replyMap.remove(event.getNotifyId()))
@@ -166,7 +191,6 @@ public class DefaultRedisHaManager implements RedisHaManager {
                             } else {
                                 notifyReply.future.completeExceptionally(new RuntimeException(event.getErrorMessage()));
                             }
-
                         }));
         this.broadcastTopic.addListener((topic, node) -> {
             if (node.getId().equals(getCurrentNode().getId())) {
@@ -196,6 +220,10 @@ public class DefaultRedisHaManager implements RedisHaManager {
     }
 
     private void checkServerAlive() {
+        //上报自己
+        plus.getConnection()
+                .thenAccept(conn -> conn.async().hset("ha-manager:".concat(id), current.getId(), current));
+
         getAllNode()
                 .stream()
                 .filter(server -> !server.getId().equals(current.getId()))
@@ -207,10 +235,15 @@ public class DefaultRedisHaManager implements RedisHaManager {
                             }
                             if (!"pong".equals(pong)) {
                                 server.setState(ServerNodeInfo.State.OFFLINE);
-                                allNodeInfo.remove(server.getId());
-                                log.info("server [{}] leave [{}]", server.getId(), id);
-                                for (Consumer<ServerNodeInfo> listener : this.leaveListeners) {
-                                    listener.accept(server);
+
+                                plus.getConnection()
+                                        .thenAccept(conn -> conn.async().hdel("ha-manager:".concat(id), server.getId()));
+
+                                if (allNodeInfo.remove(server.getId()) != null) {
+                                    log.info("server [{}] leave [{}]", server.getId(), id);
+                                    for (Consumer<ServerNodeInfo> listener : this.leaveListeners) {
+                                        listener.accept(server);
+                                    }
                                 }
                                 broadcastTopic.publish(server);
                             }
@@ -230,6 +263,10 @@ public class DefaultRedisHaManager implements RedisHaManager {
         for (Runnable runnable : shutdownHooks) {
             runnable.run();
         }
+        //移除自己
+        plus.getConnection()
+                .thenAccept(conn -> conn.async().hdel("ha-manager:".concat(id), current.getId()));
+
         current.setState(ServerNodeInfo.State.OFFLINE);
         broadcastTopic.publish(current);
         shutdownHooks.clear();
@@ -274,7 +311,8 @@ public class DefaultRedisHaManager implements RedisHaManager {
                                 }
                                 return;
                             }
-                            replyTopic.publish(org.jetlinks.lettuce.supports.NotifyReply.of(message, reply, error));
+                            plus.getTopic("__ha-manager-notify-reply:".concat(id).concat(":").concat(message.getFromServer()))
+                                    .publish(org.jetlinks.lettuce.supports.NotifyReply.of(message, reply, error));
                         });
             } catch (Throwable e) {
                 replyTopic.publish(org.jetlinks.lettuce.supports.NotifyReply.of(message, null, e));
