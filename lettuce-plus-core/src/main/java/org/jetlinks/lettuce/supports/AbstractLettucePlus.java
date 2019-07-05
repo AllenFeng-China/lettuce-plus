@@ -52,8 +52,6 @@ public abstract class AbstractLettucePlus implements LettucePlus {
         return getConnection((RedisCodec<K, V>) defaultCodec, Duration.ofSeconds(60));
     }
 
-    protected abstract <K, V> CompletionStage<StatefulRedisPubSubConnection<K, V>> getPubSubConnect();
-
     @Override
     public RedisHaManager getHaManager(String id) {
         return haManagerMap.computeIfAbsent(id, _id -> new DefaultRedisHaManager(_id, this));

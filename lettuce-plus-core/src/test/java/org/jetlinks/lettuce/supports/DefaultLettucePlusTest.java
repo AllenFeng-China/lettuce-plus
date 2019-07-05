@@ -1,7 +1,5 @@
 package org.jetlinks.lettuce.supports;
 
-import io.lettuce.core.RedisClient;
-import io.lettuce.core.RedisURI;
 import lombok.SneakyThrows;
 import org.jetlinks.lettuce.*;
 import org.junit.Assert;
@@ -32,6 +30,7 @@ public class DefaultLettucePlusTest {
         RedisTopic<String> topic = plus.getTopic("test");
 
         CountDownLatch latch = new CountDownLatch(10000);
+
 
         topic.addListener((channel, data) -> latch.countDown());
 
@@ -90,7 +89,6 @@ public class DefaultLettucePlusTest {
                     .toCompletableFuture().get(10, TimeUnit.SECONDS));
 
             server1.onNotify("test-event-reply", String.class, (Function<String, CompletionStage<?>>) CompletableFuture::completedFuture);
-
 
             Assert.assertEquals(server1.sendNotifyReply("server1", "test-event-reply", "1234", Duration.ofSeconds(10))
                     .toCompletableFuture()

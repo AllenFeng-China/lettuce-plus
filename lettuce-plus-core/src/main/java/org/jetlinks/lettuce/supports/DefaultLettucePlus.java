@@ -4,13 +4,10 @@ import io.lettuce.core.ReadFrom;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
-import io.lettuce.core.cluster.RedisClusterClient;
-import io.lettuce.core.cluster.pubsub.StatefulRedisClusterPubSubConnection;
 import io.lettuce.core.codec.RedisCodec;
 import io.lettuce.core.masterslave.MasterSlave;
 import io.lettuce.core.masterslave.StatefulRedisMasterSlaveConnection;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
-import io.lettuce.core.sentinel.api.StatefulRedisSentinelConnection;
 import io.lettuce.core.sentinel.api.sync.RedisSentinelCommands;
 import lombok.Getter;
 import lombok.Setter;
@@ -19,9 +16,9 @@ import org.jetlinks.lettuce.LettucePlus;
 import org.jetlinks.lettuce.codec.FstCodec;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.*;
 
@@ -134,22 +131,33 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
         return future;
     }
 
-    @Override
     protected <K, V> CompletionStage<StatefulRedisPubSubConnection<K, V>> getPubSubConnect() {
         return CompletableFuture.completedFuture((StatefulRedisPubSubConnection) pubSubConnections.get(random.nextInt(pubSubConnections.size())));
     }
 
+    private Map<String, StatefulRedisPubSubConnection<String, ?>> topicConnections = new ConcurrentHashMap<>();
+
     @Override
     protected void subscripe(String topic) {
-        for (StatefulRedisPubSubConnection<String, Object> pubSubConnection : pubSubConnections) {
-            pubSubConnection.async().subscribe(topic);
-        }
+
+        topicConnections.computeIfAbsent(topic, _topic -> {
+            try {
+                StatefulRedisPubSubConnection connection = getPubSubConnect().toCompletableFuture()
+                        .get(10, TimeUnit.SECONDS);
+
+                connection.sync().subscribe(_topic);
+                return connection;
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+
+        });
     }
 
     @Override
     protected void unsubscripe(String topic) {
-        for (StatefulRedisPubSubConnection<String, Object> pubSubConnection : pubSubConnections) {
-            pubSubConnection.async().unsubscribe(topic);
-        }
+        Optional.ofNullable(topicConnections.remove(topic))
+                .ifPresent(conn -> conn.sync().unsubscribe(topic));
+
     }
 }
