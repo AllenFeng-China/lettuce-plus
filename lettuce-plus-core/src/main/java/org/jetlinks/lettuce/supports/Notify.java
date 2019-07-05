@@ -9,11 +9,11 @@ import java.io.Serializable;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor(staticName = "of")
-public class Event implements Serializable {
+public class Notify implements Serializable {
 
     private String fromServer;
 
-    private String eventId;
+    private String notifyId;
 
     private String address;
 

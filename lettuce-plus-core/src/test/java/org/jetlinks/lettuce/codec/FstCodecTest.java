@@ -1,12 +1,10 @@
 package org.jetlinks.lettuce.codec;
 
-import org.jetlinks.lettuce.supports.Event;
+import org.jetlinks.lettuce.supports.Notify;
 import org.junit.Assert;
 import org.junit.Test;
 
 import java.nio.ByteBuffer;
-
-import static org.junit.Assert.*;
 
 public class FstCodecTest {
 
@@ -22,9 +20,9 @@ public class FstCodecTest {
             Assert.assertEquals("test", codec.decodeValue(codec.encodeValue("test")));
 
 
-            ByteBuffer byteBuffer = codec.encodeValue(Event.of("test", "2134", "test", "1234", "aaaa"));
+            ByteBuffer byteBuffer = codec.encodeValue(Notify.of("test", "2134", "test", "1234", "aaaa"));
 
-            Assert.assertTrue(codec.decodeValue(byteBuffer) instanceof Event);
+            Assert.assertTrue(codec.decodeValue(byteBuffer) instanceof Notify);
 
         }
         System.out.println(System.currentTimeMillis() - time);

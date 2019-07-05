@@ -27,13 +27,13 @@ public class DefaultRedisHaManager implements RedisHaManager {
 
     private Map<String, List<NotifyListener>> notifyListener = new ConcurrentHashMap<>();
 
-    private RedisTopic<Event> eventTopic;
+    private RedisTopic<Notify> eventTopic;
 
-    private RedisTopic<EventReply> replyTopic;
+    private RedisTopic<org.jetlinks.lettuce.supports.NotifyReply> replyTopic;
 
     private RedisTopic<ServerNodeInfo> broadcastTopic;
 
-    private Map<String, NotifyReply<?>> replyMap = new ConcurrentHashMap<>();
+    private Map<String, NotifyReply> replyMap = new ConcurrentHashMap<>();
 
     private Map<String, ServerNodeInfo> allNodeInfo = new ConcurrentHashMap<>();
 
@@ -75,50 +75,51 @@ public class DefaultRedisHaManager implements RedisHaManager {
     @Override
     public <T> CompletionStage<T> sendNotifyReply(String serverId, String address, Object payload, Duration timeout) {
 
-        Event event = Event.of(current.getId(), UUID.randomUUID().toString(), address, payload.getClass().getName(), payload);
+        Notify notify = Notify.of(current.getId(), UUID.randomUUID().toString(), address, payload.getClass().getName(), payload);
 
         NotifyReply<T> reply = new NotifyReply<>();
         reply.timeout = System.currentTimeMillis() + timeout.toMillis();
-        replyMap.put(event.getEventId(), reply);
+        replyMap.put(notify.getNotifyId(), reply);
 
         //同一个服务器节点
         if (serverId.equals(getCurrentNode().getId())) {
-            handleEvent(event);
+            handleEvent(notify);
         } else {
-            doSend(event).whenComplete((number, error) -> {
-                if (number != null && number <= 0) {
-                    replyMap.remove(event.getEventId());
-                    reply.future.complete(null);
-                } else if (error != null) {
-                    replyMap.remove(event.getEventId());
-                    reply.future.completeExceptionally(error);
-                }
-            });
+            doSend(notify)
+                    .whenComplete((number, error) -> {
+                        if (number != null && number <= 0) {
+                            replyMap.remove(notify.getNotifyId());
+                            reply.future.complete(null);
+                        } else if (error != null) {
+                            replyMap.remove(notify.getNotifyId());
+                            reply.future.completeExceptionally(error);
+                        }
+                    });
         }
 
         return reply.future;
     }
 
-    public CompletionStage<Long> doSend(Event event) {
+    public CompletionStage<Long> doSend(Notify notify) {
 
-        return eventTopic.publish(event);
+        return eventTopic.publish(notify);
     }
 
     @Override
     public CompletionStage<Boolean> sendNotify(String serverId, String address, Object payload) {
-        Event event = Event.of(current.getId(), UUID.randomUUID().toString(), address, payload.getClass().getName(), payload);
+        Notify notify = Notify.of(current.getId(), UUID.randomUUID().toString(), address, payload.getClass().getName(), payload);
         if (serverId.equals(getCurrentNode().getId())) {
-            handleEvent(event);
+            handleEvent(notify);
             return CompletableFuture.completedFuture(true);
         }
-        return doSend(event)
+        return doSend(notify)
                 .thenApply(number -> number != null && number > 0);
 
     }
 
-    private void handleEvent(Event event) {
-        Optional.ofNullable(notifyListener.get(event.getAddress()))
-                .ifPresent(list -> list.forEach(listener -> listener.acceptMessage(event)));
+    private void handleEvent(Notify notify) {
+        Optional.ofNullable(notifyListener.get(notify.getAddress()))
+                .ifPresent(list -> list.forEach(listener -> listener.acceptMessage(notify)));
     }
 
     @Override
@@ -136,6 +137,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
     private volatile boolean running = false;
 
     @Override
+    @SuppressWarnings("all")
     public synchronized void startup(ServerNodeInfo current) {
         if (running) {
             return;
@@ -145,7 +147,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
         current.setState(ServerNodeInfo.State.ONLINE);
 
         this.current = current;
-
+        allNodeInfo.put(this.current.getId(), current);
         onNotify("ping", String.class, (Function<String, CompletionStage<?>>) CompletableFuture::completedFuture);
 
         this.eventTopic = plus.getTopic("__ha-manager-notify:".concat(id));
@@ -154,17 +156,15 @@ public class DefaultRedisHaManager implements RedisHaManager {
         this.broadcastTopic = plus.getTopic("__ha-manager-broadcast:".concat(id));
         this.broadcastTopic.publish(current);
 
-        this.eventTopic.addListener((topic, event) -> handleEvent(event));
+        this.eventTopic.addListener((topic, notify) -> handleEvent(notify));
 
         this.replyTopic.addListener((topic, event) ->
-                Optional.ofNullable(replyMap.remove(event.getEventId()))
-                        .map(notifyReply -> ((NotifyReply<Object>) notifyReply))
+                Optional.ofNullable(replyMap.remove(event.getNotifyId()))
                         .ifPresent(notifyReply -> {
                             if (event.isSuccess()) {
                                 notifyReply.future.complete(event.getPayload());
                             } else {
                                 notifyReply.future.completeExceptionally(new RuntimeException(event.getErrorMessage()));
-
                             }
 
                         }));
@@ -196,18 +196,25 @@ public class DefaultRedisHaManager implements RedisHaManager {
     }
 
     private void checkServerAlive() {
-        getAllNode().forEach(server -> sendNotifyReply(server.getId(), "ping", "pong", Duration.ofSeconds(10))
-                .whenComplete((pong, error) -> {
-                    if (error != null) {
-                        log.warn("ping server[{}] error", server.getId(), error);
-                        return;
-                    }
-                    if (!"pong".equals(pong)) {
-                        allNodeInfo.remove(server.getId());
-                        server.setState(ServerNodeInfo.State.OFFLINE);
-                        broadcastTopic.publish(server);
-                    }
-                }));
+        getAllNode()
+                .stream()
+                .filter(server -> !server.getId().equals(current.getId()))
+                .forEach(server -> sendNotifyReply(server.getId(), "ping", "pong", Duration.ofSeconds(10))
+                        .whenComplete((pong, error) -> {
+                            if (error != null) {
+                                log.warn("ping server[{}] error", server.getId(), error);
+                                return;
+                            }
+                            if (!"pong".equals(pong)) {
+                                server.setState(ServerNodeInfo.State.OFFLINE);
+                                allNodeInfo.remove(server.getId());
+                                log.info("server [{}] leave [{}]", server.getId(), id);
+                                for (Consumer<ServerNodeInfo> listener : this.leaveListeners) {
+                                    listener.accept(server);
+                                }
+                                broadcastTopic.publish(server);
+                            }
+                        }));
 
         replyMap.entrySet()
                 .stream()
@@ -231,7 +238,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
 
     private interface NotifyListener {
 
-        void acceptMessage(Event message);
+        void acceptMessage(Notify message);
 
     }
 
@@ -242,7 +249,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
         private Class<T> type;
 
         @Override
-        public void acceptMessage(Event message) {
+        public void acceptMessage(Notify message) {
             consumer.accept(convertEvent(type, message));
         }
     }
@@ -255,28 +262,30 @@ public class DefaultRedisHaManager implements RedisHaManager {
         private Class<T> type;
 
         @Override
-        public void acceptMessage(Event message) {
+        @SuppressWarnings("all")
+        public void acceptMessage(Notify message) {
             try {
                 function.apply(convertEvent(type, message))
                         .whenComplete((reply, error) -> {
                             if (message.getFromServer().equals(current.getId())) {
-                                NotifyReply localReply = replyMap.remove(message.getEventId());
+                                NotifyReply localReply = replyMap.remove(message.getNotifyId());
                                 if (localReply != null) {
                                     localReply.future.complete(reply);
                                 }
+                                return;
                             }
-                            replyTopic.publish(EventReply.of(message, reply, error));
+                            replyTopic.publish(org.jetlinks.lettuce.supports.NotifyReply.of(message, reply, error));
                         });
             } catch (Throwable e) {
-                replyTopic.publish(EventReply.of(message, null, e));
+                replyTopic.publish(org.jetlinks.lettuce.supports.NotifyReply.of(message, null, e));
             }
         }
     }
 
     @SuppressWarnings("all")
-    protected <T> T convertEvent(Class<T> type, Event event) {
+    protected <T> T convertEvent(Class<T> type, Notify notify) {
 
-        return (T) event.getPayload();
+        return (T) notify.getPayload();
     }
 
     private class NotifyReply<T> {

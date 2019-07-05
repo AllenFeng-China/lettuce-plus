@@ -36,6 +36,11 @@ public abstract class AbstractLettucePlus implements LettucePlus {
 
     public abstract <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection(RedisCodec<K, V> codec, Duration timeout);
 
+    @Override
+    public <K, V> RedisCodec<K, V> getDefaultCodec() {
+        return (RedisCodec)defaultCodec;
+    }
+
     @SuppressWarnings("all")
     public <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection(Duration timeout) {
         return getConnection((RedisCodec<K, V>) defaultCodec, timeout);
@@ -48,12 +53,6 @@ public abstract class AbstractLettucePlus implements LettucePlus {
     }
 
     protected abstract <K, V> CompletionStage<StatefulRedisPubSubConnection<K, V>> getPubSubConnect();
-
-    @Override
-    public RedisEventBus getEventBus(String id) {
-
-        return null;
-    }
 
     @Override
     public RedisHaManager getHaManager(String id) {
@@ -93,6 +92,7 @@ public abstract class AbstractLettucePlus implements LettucePlus {
                 public void shutdown() {
                     super.shutdown();
                     unsubscripe(_name);
+                    first.set(true);
                 }
             };
         });
@@ -104,7 +104,7 @@ public abstract class AbstractLettucePlus implements LettucePlus {
         return queueMap.computeIfAbsent(id, _id -> new DefaultRedisQueue(_id, this));
     }
 
-    public void init() {
+    protected void init() {
         executorService.scheduleAtFixedRate(() -> {
             for (DefaultRedisQueue value : queueMap.values()) {
                 value.flush();

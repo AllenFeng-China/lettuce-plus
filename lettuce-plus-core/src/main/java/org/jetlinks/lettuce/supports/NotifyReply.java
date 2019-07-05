@@ -9,9 +9,9 @@ import java.io.Serializable;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor(staticName = "of")
-public class EventReply implements Serializable {
+public class NotifyReply implements Serializable {
 
-    private String eventId;
+    private String notifyId;
 
     private String address;
 
@@ -25,10 +25,10 @@ public class EventReply implements Serializable {
 
     private String errorMessage;
 
-    public static EventReply of(Event event, Object payload, Throwable e) {
-        EventReply reply = new EventReply();
-        reply.setAddress(event.getAddress());
-        reply.setEventId(event.getEventId());
+    public static NotifyReply of(Notify notify, Object payload, Throwable e) {
+        NotifyReply reply = new NotifyReply();
+        reply.setAddress(notify.getAddress());
+        reply.setNotifyId(notify.getNotifyId());
         if (payload != null) {
             reply.setPayload(payload);
             reply.setPayloadType(payload.getClass().getName());

@@ -11,8 +11,6 @@ abstract class DefaultRedisTopic<T> implements RedisTopic<T> {
 
     private List<BiConsumer<String, T>> listeners = new CopyOnWriteArrayList<>();
 
-    private String topic;
-
     @Override
     public void addListener(BiConsumer<String, T> listener) {
         listeners.add(listener);

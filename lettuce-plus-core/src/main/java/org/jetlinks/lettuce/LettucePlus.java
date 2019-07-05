@@ -9,13 +9,13 @@ import java.util.concurrent.ScheduledExecutorService;
 
 public interface LettucePlus {
 
+    <K, V>  RedisCodec<K, V> getDefaultCodec();
+
     <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection(RedisCodec<K, V> codec, Duration timeout);
 
     <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection(Duration timeout);
 
     <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection();
-
-    RedisEventBus getEventBus(String id);
 
     RedisHaManager getHaManager(String id);
 
