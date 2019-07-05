@@ -32,6 +32,7 @@ public abstract class AbstractLettucePlus implements LettucePlus {
     private final Map<String, RedisHaManager> haManagerMap = new ConcurrentHashMap<>();
 
     private final Map<String, DefaultRedisTopic> redisTopicMap = new ConcurrentHashMap<>();
+
     private final Map<String, DefaultRedisQueue> queueMap = new ConcurrentHashMap<>();
 
     public abstract <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection(RedisCodec<K, V> codec, Duration timeout);

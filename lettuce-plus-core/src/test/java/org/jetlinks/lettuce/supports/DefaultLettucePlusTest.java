@@ -27,22 +27,25 @@ public class DefaultLettucePlusTest {
     @Test
     @SneakyThrows
     public void testPubSub() {
-        RedisTopic<String> topic = plus.getTopic("test");
+        //10 个topic 收发10000个消息
+        for (int i = 0; i < 10; i++) {
+            RedisTopic<String> topic = plus.getTopic("test" + i);
 
-        CountDownLatch latch = new CountDownLatch(10000);
+            CountDownLatch latch = new CountDownLatch(10000);
 
+            topic.addListener((channel, data) -> latch.countDown());
 
-        topic.addListener((channel, data) -> latch.countDown());
+            long time = System.currentTimeMillis();
 
-        long time = System.currentTimeMillis();
+            for (int j = 0; j < 10000; j++) {
+                topic.publish("test");
+            }
 
-        for (int i = 0; i < 10000; i++) {
-            topic.publish("test");
+            Assert.assertTrue(latch.await(30, TimeUnit.SECONDS));
+
+            System.out.println(System.currentTimeMillis() - time);
         }
 
-        Assert.assertTrue(latch.await(30, TimeUnit.SECONDS));
-
-        System.out.println(System.currentTimeMillis() - time);
     }
 
     @Test
@@ -52,9 +55,6 @@ public class DefaultLettucePlusTest {
         for (int i = 0; i < 10; i++) {
             RedisQueue<String> queue = plus.getQueue("queue:" + i);
 
-//            Assert.assertTrue(queue.addAsync("test").toCompletableFuture().get(10, TimeUnit.SECONDS));
-//
-//            Assert.assertEquals(queue.poll().toCompletableFuture().get(10, TimeUnit.SECONDS), "test");
 
             CountDownLatch latch = new CountDownLatch(10000);
             queue.poll(data -> latch.countDown());

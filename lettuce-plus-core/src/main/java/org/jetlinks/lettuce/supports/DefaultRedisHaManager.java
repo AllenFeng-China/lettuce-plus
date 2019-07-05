@@ -28,7 +28,6 @@ public class DefaultRedisHaManager implements RedisHaManager {
 
     private Map<String, List<NotifyListener>> notifyListener = new ConcurrentHashMap<>();
 
-    private RedisTopic<Notify> eventTopic;
 
     private RedisTopic<org.jetlinks.lettuce.supports.NotifyReply> replyTopic;
 
@@ -147,7 +146,9 @@ public class DefaultRedisHaManager implements RedisHaManager {
         Objects.requireNonNull(current.getId());
         running = true;
         current.setState(ServerNodeInfo.State.ONLINE);
+        this.current = current;
 
+        //加载所有节点
         plus.getConnection()
                 .thenApply(StatefulRedisConnection::async)
                 .thenAccept(commands -> {
@@ -155,6 +156,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
                         if (value instanceof ServerNodeInfo) {
                             ServerNodeInfo server = ((ServerNodeInfo) value);
                             if (!server.getId().equals(current.getId())) {
+                                //检查节点是否存货
                                 sendNotifyReply(server.getId(), "ping", "pong", Duration.ofSeconds(10))
                                         .thenAccept(pong -> {
                                             if ("pong".equals(pong)) {
@@ -168,20 +170,20 @@ public class DefaultRedisHaManager implements RedisHaManager {
                     }), "ha-manager:".concat(id));
                 });
 
-        this.current = current;
         allNodeInfo.put(this.current.getId(), current);
+
         onNotify("ping", String.class, (Function<String, CompletionStage<?>>) CompletableFuture::completedFuture);
 
-        this.eventTopic = plus.getTopic("__ha-manager-notify:".concat(id).concat(":").concat(current.getId()));
+        RedisTopic<Notify> eventTopic = plus.getTopic("__ha-manager-notify:".concat(id).concat(":").concat(current.getId()));
+
+        eventTopic.addListener((topic, notify) -> {
+            handleEvent(notify);
+        });
 
         this.replyTopic = plus.getTopic("__ha-manager-notify-reply:".concat(id).concat(":").concat(current.getId()));
         //节点上下线广播
         this.broadcastTopic = plus.getTopic("__ha-manager-broadcast:".concat(id));
         this.broadcastTopic.publish(current);
-
-        this.eventTopic.addListener((topic, notify) -> {
-            handleEvent(notify);
-        });
 
         this.replyTopic.addListener((topic, event) ->
                 Optional.ofNullable(replyMap.remove(event.getNotifyId()))
@@ -192,26 +194,18 @@ public class DefaultRedisHaManager implements RedisHaManager {
                                 notifyReply.future.completeExceptionally(new RuntimeException(event.getErrorMessage()));
                             }
                         }));
+
         this.broadcastTopic.addListener((topic, node) -> {
             if (node.getId().equals(getCurrentNode().getId())) {
                 return;
             }
             if (node.getState() == ServerNodeInfo.State.ONLINE) {
-                if (null == allNodeInfo.put(node.getId(), node)) {
-                    log.info("server [{}] join [{}]", node.getId(), id);
-                    for (Consumer<ServerNodeInfo> listener : this.joinListeners) {
-                        listener.accept(node);
-                    }
-                }
+                doJoin(node);
             } else {
-                if (null != allNodeInfo.remove(node.getId())) {
-                    log.info("server [{}] leave [{}]", node.getId(), id);
-                    for (Consumer<ServerNodeInfo> listener : this.leaveListeners) {
-                        listener.accept(node);
-                    }
-                }
+                doLeave(node);
             }
         });
+
         ScheduledFuture<?> future = plus.getExecutor().scheduleAtFixedRate(this::checkServerAlive, 10, 10, TimeUnit.SECONDS);
         shutdownHooks.add(broadcastTopic::shutdown);
         shutdownHooks.add(replyTopic::shutdown);
@@ -219,40 +213,61 @@ public class DefaultRedisHaManager implements RedisHaManager {
         shutdownHooks.add(() -> future.cancel(false));
     }
 
+    private void doJoin(ServerNodeInfo node) {
+        if (null == allNodeInfo.put(node.getId(), node)) {
+            log.info("server [{}] join [{}]", node.getId(), id);
+            for (Consumer<ServerNodeInfo> listener : this.joinListeners) {
+                listener.accept(node);
+            }
+        }
+    }
+
+    private void doLeave(ServerNodeInfo node) {
+        if (null != allNodeInfo.remove(node.getId())) {
+            log.info("server [{}] leave [{}]", node.getId(), id);
+            for (Consumer<ServerNodeInfo> listener : this.leaveListeners) {
+                listener.accept(node);
+            }
+        }
+    }
+
+    private void doPing(ServerNodeInfo server) {
+        sendNotifyReply(server.getId(), "ping", "pong", Duration.ofSeconds(10))
+                .whenComplete((pong, error) -> {
+                    if (error != null) {
+                        log.warn("ping server[{}] error", server.getId(), error);
+                        return;
+                    }
+                    if (!"pong".equals(pong)) {
+                        server.setState(ServerNodeInfo.State.OFFLINE);
+
+                        plus.getConnection()
+                                .thenAccept(conn -> conn.async().hdel("ha-manager:".concat(id), server.getId()));
+
+                        doLeave(server);
+
+                        broadcastTopic.publish(server);
+                    }
+                });
+    }
+
     private void checkServerAlive() {
         //上报自己
         plus.getConnection()
                 .thenAccept(conn -> conn.async().hset("ha-manager:".concat(id), current.getId(), current));
 
+        //检查节点
         getAllNode()
                 .stream()
                 .filter(server -> !server.getId().equals(current.getId()))
-                .forEach(server -> sendNotifyReply(server.getId(), "ping", "pong", Duration.ofSeconds(10))
-                        .whenComplete((pong, error) -> {
-                            if (error != null) {
-                                log.warn("ping server[{}] error", server.getId(), error);
-                                return;
-                            }
-                            if (!"pong".equals(pong)) {
-                                server.setState(ServerNodeInfo.State.OFFLINE);
-
-                                plus.getConnection()
-                                        .thenAccept(conn -> conn.async().hdel("ha-manager:".concat(id), server.getId()));
-
-                                if (allNodeInfo.remove(server.getId()) != null) {
-                                    log.info("server [{}] leave [{}]", server.getId(), id);
-                                    for (Consumer<ServerNodeInfo> listener : this.leaveListeners) {
-                                        listener.accept(server);
-                                    }
-                                }
-                                broadcastTopic.publish(server);
-                            }
-                        }));
-
+                .forEach(this::doPing);
+        TimeoutException exception = new TimeoutException();
+        exception.setStackTrace(Thread.currentThread().getStackTrace());
+        //检查超时
         replyMap.entrySet()
                 .stream()
                 .filter(e -> System.currentTimeMillis() > e.getValue().timeout)
-                .peek(e -> e.getValue().future.completeExceptionally(new TimeoutException()))
+                .peek(e -> e.getValue().tryFail())
                 .map(Map.Entry::getKey)
                 .forEach(replyMap::remove);
     }
@@ -327,7 +342,18 @@ public class DefaultRedisHaManager implements RedisHaManager {
     }
 
     private class NotifyReply<T> {
-        CompletableFuture<T> future = new CompletableFuture<>();
-        long timeout;
+        private CompletableFuture<T> future = new CompletableFuture<>();
+
+        private long timeout;
+
+        private StackTraceElement[] elements;
+
+        public void tryFail() {
+            TimeoutException exception = new TimeoutException();
+            if (elements != null) {
+                exception.setStackTrace(elements);
+            }
+            future.completeExceptionally(exception);
+        }
     }
 }

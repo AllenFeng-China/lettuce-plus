@@ -1,7 +1,6 @@
 package org.jetlinks.lettuce.codec;
 
 import io.lettuce.core.codec.RedisCodec;
-import io.lettuce.core.codec.StringCodec;
 import lombok.SneakyThrows;
 import org.nustaq.serialization.*;
 import org.nustaq.serialization.coders.FSTStreamDecoder;
