@@ -29,17 +29,19 @@ public abstract class AbstractLettucePlus implements LettucePlus {
     @Setter
     protected ScheduledExecutorService executorService;
 
-    private final Map<String, RedisHaManager> haManagerMap = new ConcurrentHashMap<>();
+    protected final Map<String, RedisHaManager> haManagerMap = new ConcurrentHashMap<>();
 
-    private final Map<String, DefaultRedisTopic> redisTopicMap = new ConcurrentHashMap<>();
+    protected final Map<String, DefaultRedisTopic> redisTopicMap = new ConcurrentHashMap<>();
 
-    private final Map<String, DefaultRedisQueue> queueMap = new ConcurrentHashMap<>();
+    protected final Map<String, DefaultRedisQueue> queueMap = new ConcurrentHashMap<>();
+
+    protected final Map<String, DefaultRedisLocalCacheMap> localCacheMap = new ConcurrentHashMap<>();
 
     public abstract <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection(RedisCodec<K, V> codec, Duration timeout);
 
     @Override
     public <K, V> RedisCodec<K, V> getDefaultCodec() {
-        return (RedisCodec)defaultCodec;
+        return (RedisCodec) defaultCodec;
     }
 
     @SuppressWarnings("all")
@@ -73,9 +75,14 @@ public abstract class AbstractLettucePlus implements LettucePlus {
             return new DefaultRedisTopic<T>() {
 
                 @Override
+                public boolean isPattern() {
+                    return false;
+                }
+
+                @Override
                 public void addListener(BiConsumer<String, T> listener) {
                     if (first.get()) {
-                        subscripe(_name);
+                        subscripe(_name,false);
                     }
                     first.set(false);
                     super.addListener(listener);
@@ -97,6 +104,50 @@ public abstract class AbstractLettucePlus implements LettucePlus {
         });
     }
 
+    public <T> RedisTopic<T> getPatternTopic(String name) {
+
+        return redisTopicMap.computeIfAbsent(name, _name -> {
+
+            AtomicBoolean first = new AtomicBoolean(true);
+
+            return new DefaultRedisTopic<T>() {
+
+                @Override
+                public boolean isPattern() {
+                    return true;
+                }
+
+                @Override
+                public void addListener(BiConsumer<String, T> listener) {
+                    if (first.get()) {
+                        subscripe(_name,true);
+                    }
+                    first.set(false);
+                    super.addListener(listener);
+                }
+
+                @Override
+                public CompletionStage<Long> publish(T data) {
+                    return getConnection()
+                            .thenCompose(connection -> connection.async().publish(_name, data));
+                }
+
+                @Override
+                public void shutdown() {
+                    super.shutdown();
+                    unsubscripe(_name);
+                    first.set(true);
+                }
+            };
+        });
+    }
+
+    @Override
+    public <K, V> RedisLocalCacheMap<K, V> getLocalCacheMap(String id) {
+        return localCacheMap.computeIfAbsent(id, _id -> {
+            return new DefaultRedisLocalCacheMap(_id, this);
+        });
+    }
 
     @Override
     public <T> RedisQueue<T> getQueue(String id) {
@@ -130,6 +181,11 @@ public abstract class AbstractLettucePlus implements LettucePlus {
         public void subscribed(String channel, long count) {
             super.subscribed(channel, count);
         }
+
+        @Override
+        public void psubscribed(String pattern, long count) {
+            super.psubscribed(pattern, count);
+        }
     };
 
     protected void bindPubSubListener(StatefulRedisPubSubConnection<String, Object> connection) {
@@ -137,7 +193,7 @@ public abstract class AbstractLettucePlus implements LettucePlus {
         connection.addListener(listener);
     }
 
-    protected abstract void subscripe(String topic);
+    protected abstract void subscripe(String topic,boolean pattern);
 
     protected abstract void unsubscripe(String topic);
 

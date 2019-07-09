@@ -1,7 +1,11 @@
 package org.jetlinks.lettuce.codec;
 
 import io.lettuce.core.codec.RedisCodec;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufInputStream;
+import io.netty.buffer.Unpooled;
 import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
 import org.nustaq.serialization.*;
 import org.nustaq.serialization.coders.FSTStreamDecoder;
 import org.nustaq.serialization.coders.FSTStreamEncoder;
@@ -10,8 +14,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
 @SuppressWarnings("all")
+@Slf4j
 public class FstCodec<K, V> implements RedisCodec<K, V> {
 
     private FSTConfiguration config;
@@ -104,9 +110,12 @@ public class FstCodec<K, V> implements RedisCodec<K, V> {
     @Override
     @SneakyThrows
     public V decodeValue(ByteBuffer bytes) {
-
-        return (V) config.getObjectInput(new ByteBufferBackedInputStream(bytes))
-                .readObject();
+        try {
+            return (V) config.getObjectInput(new ByteBufferBackedInputStream(bytes)).readObject();
+        } catch (Exception e) {
+            log.warn("decode value error", e);
+            return null;
+        }
     }
 
     @Override

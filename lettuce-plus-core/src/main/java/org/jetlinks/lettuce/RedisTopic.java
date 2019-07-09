@@ -12,4 +12,5 @@ public interface RedisTopic<T> {
 
     void shutdown();
 
+    boolean isPattern();
 }

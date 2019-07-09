@@ -180,7 +180,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
         EVAL;
         private static final String script =
                 "local val = redis.call('lpush',KEYS[1],ARGV[1]);"
-                        + "redis.call('publish',KEYS[2],KEYS[1]);"
+                        + "redis.call('publish',KEYS[2],ARGV[2]);"
                         + "return val;";
 
         private final byte[] name;
@@ -194,14 +194,14 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
             return name;
         }
 
-        <T> AsyncCommand<String, T, Long> newCommand(String id, T data, RedisCodec<String, T> codec) {
+       <T> AsyncCommand<String, T, Long> newCommand(String id, T data, RedisCodec<String, T> codec) {
             return new AsyncCommand<>(new Command<>(PushCommand.EVAL,
                     new IntegerOutput<>(codec),
                     new CommandArgs<>(codec)
                             .add(script)
                             .add(2)
                             .addKeys(id, "_queue_flush:".concat(id))
-                            .addValue(data)
+                            .addValues(data,(T) id)
             ));
         }
     }

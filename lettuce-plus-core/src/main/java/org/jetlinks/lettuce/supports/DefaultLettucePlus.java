@@ -5,6 +5,7 @@ import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.codec.RedisCodec;
+import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterslave.MasterSlave;
 import io.lettuce.core.masterslave.StatefulRedisMasterSlaveConnection;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
@@ -13,8 +14,11 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.lettuce.LettucePlus;
+import org.jetlinks.lettuce.RedisTopic;
 import org.jetlinks.lettuce.codec.FstCodec;
+import org.jetlinks.lettuce.codec.StringKeyCodec;
 
+import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -49,7 +53,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
     public static LettucePlus standalone(RedisClient client) {
         DefaultLettucePlus plus = new DefaultLettucePlus(client);
         plus.setExecutorService(Executors.newScheduledThreadPool(16));
-        plus.setDefaultCodec(new FstCodec<>());
+        plus.setDefaultCodec(new StringKeyCodec<>(new FstCodec<>()));
         plus.init();
         plus.initStandalone();
         return plus;
@@ -59,7 +63,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
 
         DefaultLettucePlus plus = new DefaultLettucePlus(client);
         plus.setExecutorService(Executors.newScheduledThreadPool(16));
-        plus.setDefaultCodec(new FstCodec<>());
+        plus.setDefaultCodec(new StringKeyCodec<>(new FstCodec<>()));
         plus.init();
         plus.initSentinel(redisURI);
 
@@ -71,8 +75,6 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
         {
             RedisSentinelCommands<String, String> connection = redisClient.connectSentinel(redisURI).sync();
             Map<String, String> master = connection.master("mymaster");
-            System.out.println(master);
-            System.out.println(connection.slaves("mymaster"));
         }
         for (int i = 0; i < poolSize; i++) {
             StatefulRedisMasterSlaveConnection<?, ?> connection = MasterSlave.connect(redisClient, getDefaultCodec(), redisURI);
@@ -138,14 +140,17 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
     private Map<String, StatefulRedisPubSubConnection<String, ?>> topicConnections = new ConcurrentHashMap<>();
 
     @Override
-    protected void subscripe(String topic) {
+    protected void subscripe(String topic, boolean pattern) {
 
         topicConnections.computeIfAbsent(topic, _topic -> {
             try {
-                StatefulRedisPubSubConnection connection = getPubSubConnect().toCompletableFuture()
-                        .get(10, TimeUnit.SECONDS);
+                StatefulRedisPubSubConnection connection = getPubSubConnect().toCompletableFuture().get(10, TimeUnit.SECONDS);
 
-                connection.sync().subscribe(_topic);
+                if (pattern) {
+                    connection.sync().psubscribe(_topic);
+                } else {
+                    connection.sync().subscribe(_topic);
+                }
                 return connection;
             } catch (Exception e) {
                 throw new RuntimeException(e);
@@ -157,7 +162,19 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
     @Override
     protected void unsubscripe(String topic) {
         Optional.ofNullable(topicConnections.remove(topic))
-                .ifPresent(conn -> conn.sync().unsubscribe(topic));
+                .ifPresent(conn -> {
+                    RedisTopic<?> redisTopic = redisTopicMap.get(topic);
+                    if (redisTopic == null) {
+                        conn.sync().unsubscribe(topic);
+                        conn.sync().punsubscribe(topic);
+                    } else {
+                        if (redisTopic.isPattern()) {
+                            conn.sync().punsubscribe(topic);
+                        } else {
+                            conn.sync().unsubscribe(topic);
+                        }
+                    }
+                });
 
     }
 }

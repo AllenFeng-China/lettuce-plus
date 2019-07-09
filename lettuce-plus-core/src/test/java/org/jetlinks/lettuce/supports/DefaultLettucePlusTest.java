@@ -7,10 +7,7 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.time.Duration;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.function.Function;
 
 public class DefaultLettucePlusTest {
@@ -24,12 +21,51 @@ public class DefaultLettucePlusTest {
 //                RedisURI.create("redis-sentinel://192.168.20.143:26380,192.168.20.143:26381,192.168.20.143:26382/0#mymaster"));
     }
 
+
+    @Test
+    public void testMapCache() {
+
+        RedisLocalCacheMap<String, Object> map = plus.getLocalCacheMap("test_");
+        map.clear();
+        Assert.assertNull(map.get("test"));
+        Assert.assertNull(map.put("test", "test"));
+
+        long time = System.currentTimeMillis();
+
+        for (int i1 = 0; i1 < 1000; i1++) {
+            map.fastPutAsync("test", "test");
+            Assert.assertEquals(map.get("test"), "test");
+        }
+
+        Assert.assertTrue(map.containsValue("test"));
+        Assert.assertTrue(map.containsKey("test"));
+
+        Assert.assertFalse(map.replace("test", "test2", "test3"));
+        Assert.assertTrue(map.replace("test", "test", "test"));
+
+        Assert.assertEquals(map.putIfAbsent("test", "test2"), "test");
+
+        Assert.assertTrue(map.keySet().contains("test"));
+        Assert.assertTrue(map.entrySet().stream().anyMatch(e -> e.getKey().equals("test")));
+
+        Assert.assertEquals(map.remove("test"), "test");
+
+        Assert.assertEquals(map.size(), 0);
+
+        Assert.assertTrue(map.isEmpty());
+        System.out.println(System.currentTimeMillis() - time);
+
+
+    }
+
     @Test
     @SneakyThrows
     public void testPubSub() {
+        LettucePlus plus2 = DefaultLettucePlus.standalone(RedisClientHelper.createRedisClient());
+
         //10 个topic 收发10000个消息
         for (int i = 0; i < 10; i++) {
-            RedisTopic<String> topic = plus.getTopic("test" + i);
+            RedisTopic<String> topic = plus.getTopic("test"+i);
 
             CountDownLatch latch = new CountDownLatch(10000);
 
@@ -38,13 +74,24 @@ public class DefaultLettucePlusTest {
             long time = System.currentTimeMillis();
 
             for (int j = 0; j < 10000; j++) {
-                topic.publish("test");
+                plus2.getTopic("test"+i).publish("test");
             }
 
             Assert.assertTrue(latch.await(30, TimeUnit.SECONDS));
 
             System.out.println(System.currentTimeMillis() - time);
         }
+
+        CountDownLatch latch=new CountDownLatch(1);
+
+        RedisTopic<String> topic = plus.getPatternTopic("test*");
+        topic.addListener((channel, data) -> latch.countDown());
+
+        plus2.getTopic("test123123")
+                .publish("test")
+                .thenAccept(System.out::println);
+
+       Assert.assertTrue( latch.await(30,TimeUnit.SECONDS));
 
     }
 
@@ -114,7 +161,7 @@ public class DefaultLettucePlusTest {
             }
             //测试发送无回复通知
             {
-                CountDownLatch notifyCountDown = new CountDownLatch(1);
+                CountDownLatch notifyCountDown = new CountDownLatch(1000);
                 server1.onNotify("test-event", String.class, data -> {
                     notifyCountDown.countDown();
                 });
