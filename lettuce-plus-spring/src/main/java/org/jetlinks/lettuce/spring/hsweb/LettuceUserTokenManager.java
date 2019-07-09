@@ -52,13 +52,13 @@ public class LettuceUserTokenManager implements UserTokenManager {
     //事件转发器
     private ApplicationEventPublisher eventPublisher;
 
-    private String redisPrefix;
+    private final String redisPrefix;
 
     public LettuceUserTokenManager(String prefix, LettucePlus plus) {
         this.plus = plus;
-        this.redisPrefix = prefix;
+        this.redisPrefix = prefix.intern();
 
-        plus.<String>getTopic(prefix.concat(":user-token-changed"))
+        plus.<String>getTopic(redisPrefix.concat(":user-token-changed"))
                 .addListener((channel, token) -> Optional.ofNullable(token)
                         .map(this.tokenStore::get)
                         .map(SoftReference::get)
@@ -130,7 +130,7 @@ public class LettuceUserTokenManager implements UserTokenManager {
 
     @Override
     public boolean userIsLoggedIn(String userId) {
-
+        // TODO: 2019-07-09 优化
         return getByUserId(userId).size() > 0;
     }
 
@@ -221,20 +221,20 @@ public class LettuceUserTokenManager implements UserTokenManager {
     @SneakyThrows
     public UserToken signIn(String token, String type, String userId, long maxInactiveInterval) {
 
-
         AllopatricLoginMode mode = allopatricLoginModes.getOrDefault(type, allopatricLoginMode);
         if (mode == AllopatricLoginMode.deny) {
+            //如果在其他地方已经登陆了，则禁止当前登陆
             String script = "" +
                     "local tokens = redis.call('smembers', KEYS[1]);" +
                     "for i = 1, #tokens, 1 do " +
-                    "local key = '" + redisPrefix + "'..':user-token:'..tokens[i];" +
-                    "local state = redis.call('hget',key,'state');" +
-                    "if state == nil then " +
-                    "redis.call('srem',KEYS[1],tokens[i]);" +
-                    "end;" +
-                    "if state == ARGV[1] and tokens[i] ~= KEYS[2] then " +
-                    "return 0;" + //有其他token存活，则认为已经在其他地方登陆了
-                    "end;" +
+                        "local key = KEYS[3]..':user-token:'..tokens[i];" +
+                        "local state = redis.call('hget',key,'state');" +
+                        "if state == nil then " +
+                            "redis.call('srem',KEYS[1],tokens[i]);" +
+                        "end;" +
+                        "if state == ARGV[1] and tokens[i] ~= KEYS[2] then " +
+                            "return 0;" + //有其他token存在，则认为已经在其他地方登陆了
+                        "end;" +
                     "end;" +
                     "redis.call('sadd', KEYS[1], KEYS[2]);" +
                     "return 1;";
@@ -245,8 +245,10 @@ public class LettuceUserTokenManager implements UserTokenManager {
                                 new BooleanOutput<>(plus.getDefaultCodec()),
                                 new CommandArgs<>(plus.getDefaultCodec())
                                         .add(script)
-                                        .add(2)
-                                        .addKeys(redisPrefix.concat(":user-tokens:").concat(userId), token)
+                                        .add(3)
+                                        .addKeys(redisPrefix.concat(":user-tokens:").concat(userId),
+                                                token,
+                                                redisPrefix)
                                         .addValues(TokenState.normal)));
 
                         conn.dispatch(command);
@@ -260,19 +262,20 @@ public class LettuceUserTokenManager implements UserTokenManager {
 
         } else if (mode == AllopatricLoginMode.offlineOther) {
 
+            //踢出其他地方登陆的相同用户
             String script = "" +
                     "local tokens = redis.call('smembers', KEYS[1]);" +
                     "redis.call('sadd', KEYS[1], KEYS[3]);" +
                     "for i = 1, #tokens, 1 do " +
-                    "local key = '" + redisPrefix + "'..':user-token:'..tokens[i];" +
-                    "local type = redis.call('hmget',key,'type','token');" +
-                    "if type[1] == nil then " +
-                    "redis.call('srem',KEYS[1],tokens[i]);" +
-                    "end;" +
-                    "if type[1] == ARGV[1] and tokens[i] ~= KEYS[3] then " +
-                    "redis.call('hset',key,'state',ARGV[2]);" +
-                    "redis.call('publish',KEYS[2],type[2]);" +
-                    "end;" +
+                        "local key = KEYS[4]..':user-token:'..tokens[i];" +
+                        "local type = redis.call('hmget',key,'type','token');" +
+                        "if type[1] == nil then " +
+                            "redis.call('srem',KEYS[1],tokens[i]);" +
+                        "end;" +
+                        "if type[1] == ARGV[1] and tokens[i] ~= KEYS[3] then " +
+                            "redis.call('hset',key,'state',ARGV[2]);" +
+                            "redis.call('publish',KEYS[2],type[2]);" +
+                        "end;" +
                     "end; " +
                     "return 'success';";
 
@@ -282,10 +285,11 @@ public class LettuceUserTokenManager implements UserTokenManager {
                                 new ValueOutput<>(StringCodec.getInstance()),
                                 new CommandArgs<>(plus.getDefaultCodec())
                                         .add(script)
-                                        .add(3)
+                                        .add(4)
                                         .addKeys(redisPrefix.concat(":user-tokens:").concat(userId),
                                                 redisPrefix.concat(":user-token-changed"),
-                                                token)
+                                                token,
+                                                redisPrefix)
                                         .addValues(type, TokenState.offline)));
 
                         conn.dispatch(command);

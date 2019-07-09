@@ -199,9 +199,9 @@ public class LettuceUserToken implements UserToken {
         all.put("token", token);
 
         this.<String, Object>getRedis()
-                .async()
-                .hmset(redisKey, all)
-                .thenRun(this::touch);
+                .sync()
+                .hmset(redisKey, all);
+        touch();
     }
 
 
