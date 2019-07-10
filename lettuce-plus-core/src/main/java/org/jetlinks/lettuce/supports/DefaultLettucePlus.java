@@ -4,8 +4,6 @@ import io.lettuce.core.ReadFrom;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.api.StatefulRedisConnection;
-import io.lettuce.core.codec.RedisCodec;
-import io.lettuce.core.codec.StringCodec;
 import io.lettuce.core.masterslave.MasterSlave;
 import io.lettuce.core.masterslave.StatefulRedisMasterSlaveConnection;
 import io.lettuce.core.pubsub.StatefulRedisPubSubConnection;
@@ -15,11 +13,10 @@ import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.lettuce.LettucePlus;
 import org.jetlinks.lettuce.RedisTopic;
+import org.jetlinks.lettuce.codec.ByteBufferCodec;
 import org.jetlinks.lettuce.codec.FstCodec;
 import org.jetlinks.lettuce.codec.StringKeyCodec;
 
-import java.nio.ByteBuffer;
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -86,7 +83,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
         RedisClient client = RedisClient.create(redisClient.getResources(), redisURI);
         log.info("init redis pubsub connection pool : {}", pubsubSize);
         for (int i = 0; i < pubsubSize; i++) {
-            StatefulRedisPubSubConnection<String, Object> connection = client.connectPubSub((RedisCodec) getDefaultCodec());
+            StatefulRedisPubSubConnection<String, Object> connection = client.connectPubSub(new StringKeyCodec<>(new ByteBufferCodec<>()));
             connection.setAutoFlushCommands(true);
             bindPubSubListener(connection);
             pubSubConnections.add(connection);
@@ -103,7 +100,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
 
         log.info("init redis pubsub connection pool : {}", pubsubSize);
         for (int i = 0; i < pubsubSize; i++) {
-            StatefulRedisPubSubConnection<String, Object> connection = redisClient.connectPubSub((RedisCodec) getDefaultCodec());
+            StatefulRedisPubSubConnection<String, Object> connection = redisClient.connectPubSub(new StringKeyCodec<>(new ByteBufferCodec<>()));
             connection.setAutoFlushCommands(true);
             bindPubSubListener(connection);
             pubSubConnections.add(connection);
@@ -115,7 +112,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
     }
 
     @Override
-    public <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection(RedisCodec<K, V> codec, Duration timeout) {
+    public <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection() {
         CompletableFuture<StatefulRedisConnection<K, V>> future = new CompletableFuture<>();
 
         if (connections.isEmpty()) {
@@ -127,7 +124,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
             future.complete(connection);
         } else {
             connections.remove(connection);
-            return getConnection(codec, timeout);
+            return getConnection();
         }
 
         return future;
@@ -145,7 +142,6 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
         topicConnections.computeIfAbsent(topic, _topic -> {
             try {
                 StatefulRedisPubSubConnection connection = getPubSubConnect().toCompletableFuture().get(10, TimeUnit.SECONDS);
-
                 if (pattern) {
                     connection.sync().psubscribe(_topic);
                 } else {
@@ -158,6 +154,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
 
         });
     }
+
 
     @Override
     protected void unsubscripe(String topic) {

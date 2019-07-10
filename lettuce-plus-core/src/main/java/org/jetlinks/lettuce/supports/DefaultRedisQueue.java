@@ -1,6 +1,6 @@
 package org.jetlinks.lettuce.supports;
 
-import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import io.lettuce.core.codec.RedisCodec;
 import io.lettuce.core.output.IntegerOutput;
@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.lettuce.LettucePlus;
 import org.jetlinks.lettuce.RedisQueue;
 import org.jetlinks.lettuce.RedisTopic;
+import org.jetlinks.lettuce.codec.StringCodec;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -34,10 +35,15 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
 
     private Queue<T> localBuffer = new ConcurrentLinkedQueue<>();
 
-    public DefaultRedisQueue(String id, LettucePlus plus) {
+    private double localConsumerPoint = Double.valueOf(System.getProperty("lettuce.plus.queue.local.consumer.point", "0.5"));
+
+    private RedisCodec<String, T> codec;
+
+    public DefaultRedisQueue(String id, LettucePlus plus, RedisCodec<String, T> codec) {
         this.id = id;
         this.plus = plus;
-        flushTopic = plus.getTopic("_queue_flush:".concat(id));
+        this.codec = codec;
+        flushTopic = plus.getTopic(StringCodec.getInstance(), "_queue_flush:".concat(id));
     }
 
     private AtomicLong flushCounter = new AtomicLong();
@@ -63,8 +69,8 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
 
     @Override
     public CompletionStage<T> poll() {
-        return plus.<String, T>getConnection()
-                .thenCompose(connection -> connection.async().lpop(id));
+        return plus.getRedisAsync(codec)
+                .thenCompose(redis -> redis.lpop(id));
     }
 
     private void doFlush(RedisAsyncCommands<String, T> commands) {
@@ -91,8 +97,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
             return;
         }
         flushCounter.incrementAndGet();
-        plus.<String, T>getConnection()
-                .thenApply(StatefulRedisConnection::async)
+        plus.getRedisAsync(codec)
                 .whenComplete((command, error) -> {
                     try {
                         if (command != null) {
@@ -126,9 +131,14 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
         }
     }
 
+    private void flushBuffer() {
+        plus.getRedisAsync(codec)
+                .thenAccept(this::flushBuffer);
+    }
+
     public CompletionStage<Boolean> addAll(Collection<T> data) {
-        return plus.<String, Object>getConnection()
-                .thenCompose(connection -> connection.async().lpush(id, data.toArray()))
+        return plus.getRedisAsync(codec)
+                .thenCompose(redis -> redis.lpush(id, (T[]) data.toArray()))
                 .whenComplete((len, error) -> {
                     if (error != null) {
                         log.error("add queue [{}] data error", id, error);
@@ -148,20 +158,17 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
     @Override
     public CompletionStage<Boolean> addAsync(T data) {
 
-        if (!listeners.isEmpty() && Math.random() < 0.5) {
+        if (!listeners.isEmpty() && Math.random() < localConsumerPoint) {
             for (Consumer<T> listener : listeners) {
                 listener.accept(data);
             }
             return CompletableFuture.completedFuture(true);
         }
 
-        return plus.<String, T>getConnection()
-                .thenCompose(connection -> {
-                    flushBuffer(connection.async());
-                    AsyncCommand<String, T, Long> command = PushCommand.EVAL.newCommand(id, data, plus.getDefaultCodec());
-                    connection.dispatch(command);
-                    return command;
-                })
+        return plus.<Long>eval("" +
+                "local val = redis.call('lpush',KEYS[1],ARGV[1]);" +
+                "redis.call('publish',KEYS[2],KEYS[1]);" +
+                "return val;", ScriptOutputType.INTEGER, new String[]{id, "_queue_flush:".concat(id)}, data)
                 .whenComplete((len, error) -> {
                     if (error != null) {
                         log.error("add queue [{}] data error", id, error);
@@ -172,39 +179,10 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                         } else {
                             localBuffer.add(data);
                         }
+                    } else {
+                        flushBuffer();
                     }
                 }).thenApply(len -> true);
     }
-
-    enum PushCommand implements ProtocolKeyword {
-        EVAL;
-        private static final String script =
-                "local val = redis.call('lpush',KEYS[1],ARGV[1]);"
-                        + "redis.call('publish',KEYS[2],ARGV[2]);"
-                        + "return val;";
-
-        private final byte[] name;
-
-        PushCommand() {
-            name = name().getBytes();
-        }
-
-        @Override
-        public byte[] getBytes() {
-            return name;
-        }
-
-       <T> AsyncCommand<String, T, Long> newCommand(String id, T data, RedisCodec<String, T> codec) {
-            return new AsyncCommand<>(new Command<>(PushCommand.EVAL,
-                    new IntegerOutput<>(codec),
-                    new CommandArgs<>(codec)
-                            .add(script)
-                            .add(2)
-                            .addKeys(id, "_queue_flush:".concat(id))
-                            .addValues(data,(T) id)
-            ));
-        }
-    }
-
 
 }

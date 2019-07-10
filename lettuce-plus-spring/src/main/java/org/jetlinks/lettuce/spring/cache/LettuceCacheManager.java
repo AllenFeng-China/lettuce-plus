@@ -10,6 +10,7 @@ public class LettuceCacheManager extends ConcurrentMapCacheManager {
 
     public LettuceCacheManager(LettucePlus plus) {
         this.plus = plus;
+        setAllowNullValues(true);
     }
 
     @Override

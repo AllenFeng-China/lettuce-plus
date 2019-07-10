@@ -3,6 +3,7 @@ package org.jetlinks.lettuce.spring.hsweb;
 import io.lettuce.core.KeyScanCursor;
 import io.lettuce.core.ScanArgs;
 import io.lettuce.core.ScanCursor;
+import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.output.*;
 import io.lettuce.core.protocol.AsyncCommand;
@@ -112,26 +113,40 @@ public class LettuceUserTokenManager implements UserTokenManager {
     @SneakyThrows
     public List<UserToken> getByUserId(String userId) {
 
-        AsyncCommand<String, String, Set<String>> command = new AsyncCommand<>(new Command<>(CommandType.SMEMBERS,
-                new ValueSetOutput<>(StringCodec.getInstance()),
-                new CommandArgs<>(StringCodec.<String, String>getInstance())
-                        .addKey(redisPrefix.concat(":user-tokens:").concat(userId))));
-
-        this.<String, String>getRedis().dispatch(command);
-
-        return command
-                .get()
-                .stream()
-                .map(this::getByToken)
-                .map(this::checkToken)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
+        return plus.<String, String>getRedisAsync(StringCodec.getInstance())
+                .thenCompose(redis -> redis.smembers(redisPrefix.concat(":user-tokens:").concat(userId)))
+                .thenApply(tokens -> tokens.parallelStream()
+                        .map(this::getByToken)
+                        .filter(Objects::nonNull)
+                        .map(token -> ((UserToken) token))
+                        .collect(Collectors.toList()))
+                .toCompletableFuture()
+                .get();
     }
 
     @Override
+    @SneakyThrows
     public boolean userIsLoggedIn(String userId) {
-        // TODO: 2019-07-09 优化
-        return getByUserId(userId).size() > 0;
+
+        String script = "" +
+                "local tokens = redis.call('smembers', KEYS[1]);" +
+                "for i = 1, #tokens, 1 do " +
+                "   local key = KEYS[2]..':user-token:'..tokens[i];" +
+                "   local state = redis.call('hget',key,'state');" +
+                "   if state == nil then " +
+                "       redis.call('srem',KEYS[1],tokens[i]);" +
+                "   end;" +
+                "   if state == ARGV[1] then " +
+                "       return 1;" +
+                "   end;" +
+                "end;" +
+                "return 0;";
+
+
+        return plus.<Boolean>eval(script, ScriptOutputType.BOOLEAN,
+                new Object[]{redisPrefix.concat(":user-tokens:").concat(userId), redisPrefix}, TokenState.normal)
+                .toCompletableFuture()
+                .get();
     }
 
     @Override
@@ -184,7 +199,7 @@ public class LettuceUserTokenManager implements UserTokenManager {
     @Override
     public void signOutByUserId(String userId) {
         getByUserId(userId)
-                .stream()
+                .parallelStream()
                 .map(LettuceUserToken.class::cast)
                 .peek(token -> publishEvent(new UserTokenRemovedEvent(token.toSerializable())))
                 .peek(LettuceUserToken::remove)
@@ -227,35 +242,23 @@ public class LettuceUserTokenManager implements UserTokenManager {
             String script = "" +
                     "local tokens = redis.call('smembers', KEYS[1]);" +
                     "for i = 1, #tokens, 1 do " +
-                        "local key = KEYS[3]..':user-token:'..tokens[i];" +
-                        "local state = redis.call('hget',key,'state');" +
-                        "if state == nil then " +
-                            "redis.call('srem',KEYS[1],tokens[i]);" +
-                        "end;" +
-                        "if state == ARGV[1] and tokens[i] ~= KEYS[2] then " +
-                            "return 0;" + //有其他token存在，则认为已经在其他地方登陆了
-                        "end;" +
+                    "   local key = KEYS[3]..':user-token:'..tokens[i];" +
+                    "   local state = redis.call('hget',key,'state');" +
+                    "   if state == nil then " +
+                    "       redis.call('srem',KEYS[1],tokens[i]);" +
+                    "   end;" +
+                    "   if state == ARGV[1] and tokens[i] ~= KEYS[2] then " +
+                    "       return 0;" + //有其他token存在，则认为已经在其他地方登陆了
+                    "   end;" +
                     "end;" +
                     "redis.call('sadd', KEYS[1], KEYS[2]);" +
                     "return 1;";
-
-            boolean success = plus.getConnection()
-                    .thenCompose(conn -> {
-                        AsyncCommand<Object, Object, Boolean> command = new AsyncCommand<>(new Command<>(LettuceUserToken.EvalCommand.EVAL,
-                                new BooleanOutput<>(plus.getDefaultCodec()),
-                                new CommandArgs<>(plus.getDefaultCodec())
-                                        .add(script)
-                                        .add(3)
-                                        .addKeys(redisPrefix.concat(":user-tokens:").concat(userId),
-                                                token,
-                                                redisPrefix)
-                                        .addValues(TokenState.normal)));
-
-                        conn.dispatch(command);
-                        return command;
-                    })
+            boolean success = plus.<Boolean>eval(script, ScriptOutputType.BOOLEAN,
+                    new Object[]{redisPrefix.concat(":user-tokens:").concat(userId), token, redisPrefix},
+                    TokenState.normal)
                     .toCompletableFuture()
                     .get();
+            ;
             if (!success) {
                 throw new AccessDenyException("已经在其他地方登陆", TokenState.deny.getValue(), null);
             }
@@ -267,46 +270,39 @@ public class LettuceUserTokenManager implements UserTokenManager {
                     "local tokens = redis.call('smembers', KEYS[1]);" +
                     "redis.call('sadd', KEYS[1], KEYS[3]);" +
                     "for i = 1, #tokens, 1 do " +
-                        "local key = KEYS[4]..':user-token:'..tokens[i];" +
-                        "local type = redis.call('hmget',key,'type','token');" +
-                        "if type[1] == nil then " +
-                            "redis.call('srem',KEYS[1],tokens[i]);" +
-                        "end;" +
-                        "if type[1] == ARGV[1] and tokens[i] ~= KEYS[3] then " +
-                            "redis.call('hset',key,'state',ARGV[2]);" +
-                            "redis.call('publish',KEYS[2],type[2]);" +
-                        "end;" +
+                    "   local key = KEYS[4]..':user-token:'..tokens[i];" +
+                    "   local type = redis.call('hmget',key,'type','token');" +
+                    "   if type[1] == nil then " +
+                    "       redis.call('srem',KEYS[1],tokens[i]);" +
+                    "   end;" +
+                    "   if type[1] == ARGV[1] and tokens[i] ~= KEYS[3] then " +
+                    "       redis.call('hset',key,'state',ARGV[2]);" +
+                    "       redis.call('publish',KEYS[2],type[2]);" +
+                    "   end;" +
                     "end; " +
                     "return 'success';";
 
-            plus.getConnection()
-                    .thenAccept(conn -> {
-                        AsyncCommand<Object, Object, Object> command = new AsyncCommand<>(new Command<>(LettuceUserToken.EvalCommand.EVAL,
-                                new ValueOutput<>(StringCodec.getInstance()),
-                                new CommandArgs<>(plus.getDefaultCodec())
-                                        .add(script)
-                                        .add(4)
-                                        .addKeys(redisPrefix.concat(":user-tokens:").concat(userId),
-                                                redisPrefix.concat(":user-token-changed"),
-                                                token,
-                                                redisPrefix)
-                                        .addValues(type, TokenState.offline)));
-
-                        conn.dispatch(command);
-                        command.whenComplete((success, error) -> {
-                            if (null != error) {
-                                log.error("offline other user error", error);
-                            }
-                        });
+            plus.<Boolean>eval(script, ScriptOutputType.BOOLEAN,
+                    new Object[]{
+                            //KEYS[1]
+                            redisPrefix.concat(":user-tokens:").concat(userId),
+                            //KEYS[2]
+                            redisPrefix.concat(":user-token-changed"),
+                            //KEYS[3]
+                            token,
+                            //KEYS[4]
+                            redisPrefix}, type, TokenState.offline)
+                    .whenComplete((success, error) -> {
+                        if (null != error) {
+                            log.error("offline other user error", error);
+                        }
                     });
         } else {
-            AsyncCommand<String, Object, Object> command = new AsyncCommand<>(new Command<>(CommandType.SADD,
-                    new ValueOutput<>(plus.getDefaultCodec()),
-                    new CommandArgs<>(StringCodec.<String, Object>getInstance())
-                            .addKey(redisPrefix.concat(":user-tokens:").concat(userId))
-                            .addValue(token)));
 
-            this.<String, Object>getRedis().dispatch(command);
+            plus.getRedisAsync(StringCodec.getInstance())
+                    .thenCompose(redis -> redis.sadd(redisPrefix.concat(":user-tokens:").concat(userId), token))
+                    .toCompletableFuture()
+                    .get();
 
         }
         LettuceUserToken detail = getByToken(token);

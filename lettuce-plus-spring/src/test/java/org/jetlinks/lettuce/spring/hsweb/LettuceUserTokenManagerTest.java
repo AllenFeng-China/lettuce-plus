@@ -115,18 +115,29 @@ public class LettuceUserTokenManagerTest {
     @Test
     @SneakyThrows
     public void testBenchmark() {
-        long time = System.currentTimeMillis();
-        CountDownLatch latch = new CountDownLatch(1000);
+        String userId = IDGenerator.UUID.generate();
+        try {
+            long time = System.currentTimeMillis();
+            CountDownLatch latch = new CountDownLatch(1000);
 
-        for (int i = 0; i < 1000; i++) {
-            CompletableFuture.runAsync(() -> tokenManager.signIn(IDGenerator.MD5.generate(), "test", "admin", 10_000))
-                    .whenComplete((nil, err) -> latch.countDown());
+            for (int i = 0; i < 1000; i++) {
+                CompletableFuture.runAsync(() -> tokenManager.signIn(IDGenerator.MD5.generate(), "test", userId, 10_000))
+                        .whenComplete((nil, err) -> latch.countDown());
+            }
+
+            latch.await(30, TimeUnit.SECONDS);
+
+            System.out.println(System.currentTimeMillis() - time);
+
+            Assert.assertTrue(tokenManager.userIsLoggedIn(userId));
+            Assert.assertEquals(tokenManager.getByUserId(userId).size(), 1000);
+
+
+            System.out.println(System.currentTimeMillis() - time);
+
+        } finally {
+            tokenManager.signOutByUserId(userId);
         }
-        latch.await(30, TimeUnit.SECONDS);
-        plus.getConnection().toCompletableFuture()
-                .get()
-                .sync()
-                .flushdb();
-        System.out.println(System.currentTimeMillis() - time);
+
     }
 }

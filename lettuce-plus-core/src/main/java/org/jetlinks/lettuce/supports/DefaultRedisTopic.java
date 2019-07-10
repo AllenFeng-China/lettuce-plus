@@ -1,5 +1,6 @@
 package org.jetlinks.lettuce.supports;
 
+import io.lettuce.core.codec.RedisCodec;
 import org.jetlinks.lettuce.RedisTopic;
 
 import java.util.List;
@@ -10,6 +11,8 @@ import java.util.function.BiConsumer;
 abstract class DefaultRedisTopic<T> implements RedisTopic<T> {
 
     private List<BiConsumer<String, T>> listeners = new CopyOnWriteArrayList<>();
+
+    public abstract RedisCodec<String, T> getCodec();
 
     @Override
     public void addListener(BiConsumer<String, T> listener) {

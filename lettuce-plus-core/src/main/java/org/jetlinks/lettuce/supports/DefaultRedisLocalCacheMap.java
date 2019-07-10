@@ -1,6 +1,7 @@
 package org.jetlinks.lettuce.supports;
 
 import io.lettuce.core.KeyValue;
+import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import io.lettuce.core.output.BooleanOutput;
@@ -104,24 +105,17 @@ public class DefaultRedisLocalCacheMap<K, V> implements RedisLocalCacheMap<K, V>
     @Override
     @SneakyThrows
     public boolean containsValue(Object value) {
-        String script = "local s = redis.call('hvals', KEYS[1]);" +
-                "for i = 1, #s, 1 do " +
-                "if ARGV[1] == s[i] then " +
-                "return 1 " +
-                "end " +
-                "end;" +
-                "return 0";
-        AsyncCommand<Object, Object, Boolean> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new BooleanOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.getDefaultCodec())
-                        .add(script)
-                        .add(1)
-                        .addKeys(redisKey)
-                        .addValues(value)));
-
-        this.getSyncRedis().dispatch(command);
-
-        return command.get();
+        return plus.<Boolean>eval("" +
+                        "local s = redis.call('hvals', KEYS[1]);" +
+                        "for i = 1, #s, 1 do " +
+                        "if ARGV[1] == s[i] then " +
+                        "return 1 " +
+                        "end " +
+                        "end;" +
+                        "return 0",
+                ScriptOutputType.BOOLEAN, new String[]{redisKey}, value)
+                .toCompletableFuture()
+                .get();
     }
 
     private Reference<Cache> wrapCache(Object value) {
@@ -154,46 +148,35 @@ public class DefaultRedisLocalCacheMap<K, V> implements RedisLocalCacheMap<K, V>
 
 
     public CompletionStage<Void> fastPutAsync(K key, V value) {
-        String script = "" +
-                "redis.call('hset',KEYS[1],KEYS[2],ARGV[1]);" +
-                "redis.call('publish',KEYS[3],ARGV[2]);" +
-                "return nil;";
-
-        AsyncCommand<Object, V, V> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new ValueOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.<Object, V>getDefaultCodec())
-                        .add(script)
-                        .add(3)
-                        .addKeys(redisKey, key, "_local:cache:changed:".concat(redisKey))
-                        .addValues(value, (V) key)));
-
-        this.<Object, V>getSyncRedis().dispatch(command);
         cache.put(key, wrapCache(value));
 
-        return command
-                .thenApply((nil) -> null);
+        return plus
+                .<Void>eval("" +
+                        "redis.call('hset',KEYS[1],KEYS[2],ARGV[1]);" +
+                        "redis.call('publish',KEYS[3],ARGV[2]);" +
+                        "return nil;", ScriptOutputType.VALUE, new Object[]{redisKey, key, "_local:cache:changed:".concat(redisKey)}, value, key)
+                .whenComplete((nil, error) -> {
+                    if (error != null) {
+                        cache.remove(key);
+                    }
+                });
     }
 
     public CompletionStage<V> putAsync(K key, V value) {
-        String script = "" +
-                "local val = redis.call('hget',KEYS[1],KEYS[2]);" +
-                "redis.call('hset',KEYS[1],KEYS[2],ARGV[1]);" +
-                "redis.call('publish',KEYS[3],ARGV[2]);" +
-                "return val;";
-
-        AsyncCommand<Object, V, V> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new ValueOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.<Object, V>getDefaultCodec())
-                        .add(script)
-                        .add(3)
-                        .addKeys(redisKey, key, "_local:cache:changed:".concat(redisKey))
-                        .addValues(value, (V) key)));
-
-        this.<Object, V>getSyncRedis().dispatch(command);
 
         cache.put(key, wrapCache(value));
 
-        return command;
+        return plus
+                .<V>eval("" +
+                        "local val = redis.call('hget',KEYS[1],KEYS[2]);" +
+                        "redis.call('hset',KEYS[1],KEYS[2],ARGV[1]);" +
+                        "redis.call('publish',KEYS[3],ARGV[2]);" +
+                        "return val;", ScriptOutputType.VALUE, new Object[]{redisKey, key, "_local:cache:changed:".concat(redisKey)}, value, key)
+                .whenComplete((nil, error) -> {
+                    if (error != null) {
+                        cache.remove(key);
+                    }
+                });
     }
 
     @Override
@@ -204,24 +187,14 @@ public class DefaultRedisLocalCacheMap<K, V> implements RedisLocalCacheMap<K, V>
 
     public CompletionStage<V> removeAsync(Object key) {
 
-        String script = "" +
-                "local val = redis.call('hget',KEYS[1],KEYS[2]);" +
-                "redis.call('hdel',KEYS[1],KEYS[2]);" +
-                "redis.call('publish',KEYS[3],ARGV[1]);" +
-                "return val;";
-        AsyncCommand<Object, V, V> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new ValueOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.<Object, V>getDefaultCodec())
-                        .add(script)
-                        .add(3)
-                        .addKeys(redisKey, key, "_local:cache:changed:".concat(redisKey))
-                        .addValue((V) key)));
-
-        this.<Object, V>getSyncRedis().dispatch(command);
-
         cache.remove(key);
 
-        return command;
+        return plus
+                .<V>eval("" +
+                        "local val = redis.call('hget',KEYS[1],KEYS[2]);" +
+                        "redis.call('hdel',KEYS[1],KEYS[2]);" +
+                        "redis.call('publish',KEYS[3],ARGV[1]);" +
+                        "return val;", ScriptOutputType.VALUE, new Object[]{redisKey, key, "_local:cache:changed:".concat(redisKey)}, key);
     }
 
     @Override
@@ -240,24 +213,14 @@ public class DefaultRedisLocalCacheMap<K, V> implements RedisLocalCacheMap<K, V>
 
     public CompletionStage<Void> fastRemoveAsync(K key) {
 
-        String script = "" +
-                "redis.call('hdel',KEYS[1],KEYS[2]);" +
-                "redis.call('publish',KEYS[3],ARGV[1]);" +
-                "return nil;";
-
-        AsyncCommand<Object, V, V> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new ValueOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.<Object, V>getDefaultCodec())
-                        .add(script)
-                        .add(3)
-                        .addKeys(redisKey, key, "_local:cache:changed:".concat(redisKey))
-                        .addValue((V) key)));
-
-        this.<Object, V>getSyncRedis().dispatch(command);
-
         cache.remove(key);
 
-        return command.thenApply(nil -> null);
+        return plus
+                .<Void>eval("" +
+                                "redis.call('hdel',KEYS[1],KEYS[2]);" +
+                                "redis.call('publish',KEYS[3],ARGV[1]);" +
+                                "return nil;",
+                        ScriptOutputType.VALUE, new Object[]{redisKey, key, "_local:cache:changed:".concat(redisKey)}, key);
     }
 
     @Override
@@ -337,108 +300,65 @@ public class DefaultRedisLocalCacheMap<K, V> implements RedisLocalCacheMap<K, V>
     @SneakyThrows
     public V putIfAbsent(K key, V value) {
 
-        String script = "if redis.call('hsetnx', KEYS[1], KEYS[2], ARGV[1]) == 1 then "
-                + "return nil "
-                + "else "
-                + "redis.call('publish',KEYS[3],ARGV[2]); "
-                + "return redis.call('hget', KEYS[1], KEYS[2]); "
-                + "end";
-
-        AsyncCommand<Object, V, V> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new ValueOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.<Object, V>getDefaultCodec())
-                        .add(script)
-                        .add(3)
-                        .addKeys(redisKey, key, "_local:cache:changed:".concat(redisKey))
-                        .addValues(value,(V)key)));
-
-        this.<Object, V>getSyncRedis().dispatch(command);
-
-        return command.get();
+        return plus
+                .<V>eval("if redis.call('hsetnx', KEYS[1], KEYS[2], ARGV[1]) == 1 then "
+                                + "return nil "
+                                + "else "
+                                + "redis.call('publish',KEYS[3],ARGV[2]); "
+                                + "return redis.call('hget', KEYS[1], KEYS[2]); "
+                                + "end",
+                        ScriptOutputType.VALUE, new Object[]{redisKey, key, "_local:cache:changed:".concat(redisKey)}, value, key)
+                .toCompletableFuture()
+                .get();
     }
 
     @Override
     @SneakyThrows
     public boolean remove(Object key, Object value) {
-        String script = "if redis.call('hget', KEYS[1], KEYS[2]) == ARGV[1] then "
-                + "redis.call('publish',KEYS[3],KEYS[2]); "
-                + "return redis.call('hdel', KEYS[1], ARGV[2]) "
-                + "else "
-                + "return 0 "
-                + "end";
 
-        AsyncCommand<Object, Object, Boolean> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new BooleanOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.getDefaultCodec())
-                        .add(script)
-                        .add(3)
-                        .addKeys(redisKey, key, "_local:cache:changed:".concat(redisKey))
-                        .addValues(value,key)));
-
-        this.getSyncRedis().dispatch(command);
-
-        return command.get();
+        return plus
+                .<Boolean>eval("if redis.call('hget', KEYS[1], KEYS[2]) == ARGV[1] then "
+                                + "redis.call('publish',KEYS[3],KEYS[2]); "
+                                + "return redis.call('hdel', KEYS[1], ARGV[2]) "
+                                + "else "
+                                + "return 0 "
+                                + "end",
+                        ScriptOutputType.BOOLEAN, new Object[]{redisKey, key, "_local:cache:changed:".concat(redisKey)}, value, key)
+                .toCompletableFuture()
+                .get();
     }
 
     @Override
     @SneakyThrows
     public boolean replace(K key, V oldValue, V newValue) {
-        String script = "if redis.call('hget', KEYS[1], KEYS[2]) == ARGV[1] then "
-                + "redis.call('hset', KEYS[1], KEYS[2], ARGV[2]); "
-                + "redis.call('publish',KEYS[3],ARGV[3]); "
-                + "return 1; "
-                + "else "
-                + "return 0; "
-                + "end";
-
-        AsyncCommand<Object, Object, Boolean> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new BooleanOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.getDefaultCodec())
-                        .add(script)
-                        .add(3)
-                        .addKeys(redisKey, key, "_local:cache:changed:".concat(redisKey))
-                        .addValues(oldValue, newValue,key)));
-
-        this.getSyncRedis().dispatch(command);
-
-        return command.get();
+        return plus
+                .<Boolean>eval("if redis.call('hget', KEYS[1], KEYS[2]) == ARGV[1] then "
+                                + "redis.call('hset', KEYS[1], KEYS[2], ARGV[2]); "
+                                + "redis.call('publish',KEYS[3],ARGV[3]); "
+                                + "return 1; "
+                                + "else "
+                                + "return 0; "
+                                + "end",
+                        ScriptOutputType.BOOLEAN, new Object[]{redisKey, key, "_local:cache:changed:".concat(redisKey)}, oldValue, newValue, key)
+                .toCompletableFuture()
+                .get();
     }
 
     @Override
     @SneakyThrows
     @SuppressWarnings("all")
     public V replace(K key, V value) {
-
-        String script = "if redis.call('hexists', KEYS[1], KEYS[2]) == 1 then "
-                + "local v = redis.call('hget', KEYS[1], KEYS[2]); "
-                + "redis.call('hset', KEYS[1], KEYS[2], ARGV[1]); "
-                + "redis.call('publish',KEYS[3],ARGV[2]); "
-                + "return v; "
-                + "else "
-                + "return nil; "
-                + "end";
-
-        AsyncCommand<Object, V, V> command = new AsyncCommand<>(new Command<>(ValueChangCommand.EVAL,
-                new ValueOutput<>(plus.getDefaultCodec()),
-                new CommandArgs<>(plus.<Object, V>getDefaultCodec())
-                        .add(script)
-                        .add(3)
-                        .addKeys(redisKey, key, "_local:cache:changed:".concat(redisKey))
-                        .addValues(value,(V)key)));
-
-        this.<Object, V>getSyncRedis().dispatch(command);
-        return command.get();
-    }
-
-    enum ValueChangCommand implements ProtocolKeyword {
-        EVAL;
-
-        private final byte[] name = name().getBytes();
-
-        @Override
-        public byte[] getBytes() {
-            return name;
-        }
-
+        return plus
+                .<V>eval("if redis.call('hexists', KEYS[1], KEYS[2]) == 1 then "
+                                + "local v = redis.call('hget', KEYS[1], KEYS[2]); "
+                                + "redis.call('hset', KEYS[1], KEYS[2], ARGV[1]); "
+                                + "redis.call('publish',KEYS[3],ARGV[2]); "
+                                + "return v; "
+                                + "else "
+                                + "return nil; "
+                                + "end",
+                        ScriptOutputType.VALUE, new Object[]{redisKey, key, "_local:cache:changed:".concat(redisKey)}, value, key)
+                .toCompletableFuture()
+                .get();
     }
 }
