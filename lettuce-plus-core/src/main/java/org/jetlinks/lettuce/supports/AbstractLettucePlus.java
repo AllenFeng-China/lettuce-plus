@@ -244,12 +244,15 @@ public abstract class AbstractLettucePlus implements LettucePlus {
         public void message(String channel, Object message) {
             Optional.ofNullable(redisTopicMap.get(channel))
                     .ifPresent(topic -> {
-                        if (message instanceof ByteBuffer) {
-                            ByteBuffer byteBuffer = ((ByteBuffer) message);
-                            topic.onMessage(channel, topic.getCodec().decodeValue(byteBuffer));
-                        } else {
-                            topic.onMessage(channel, message);
+                        Object msg = message;
+                        if (msg instanceof ByteBuffer) {
+                            msg = topic.getCodec().decodeValue(((ByteBuffer) msg));
                         }
+                        Object _msg = msg;
+                        getExecutor().execute(() -> {
+                            topic.onMessage(channel, _msg);
+                        });
+
                     });
         }
 
@@ -257,12 +260,14 @@ public abstract class AbstractLettucePlus implements LettucePlus {
         public void message(String pattern, String channel, Object message) {
             Optional.ofNullable(redisTopicMap.get(pattern))
                     .ifPresent(topic -> {
-                        if (message instanceof ByteBuffer) {
-                            ByteBuffer byteBuffer = ((ByteBuffer) message);
-                            topic.onMessage(channel, topic.getCodec().decodeValue(byteBuffer));
-                        } else {
-                            topic.onMessage(channel, message);
+                        Object msg = message;
+                        if (msg instanceof ByteBuffer) {
+                            msg = topic.getCodec().decodeValue(((ByteBuffer) msg));
                         }
+                        Object _msg = msg;
+                        getExecutor().execute(() -> {
+                            topic.onMessage(channel, _msg);
+                        });
                     });
         }
 

@@ -28,7 +28,6 @@ public class DefaultRedisHaManager implements RedisHaManager {
 
     private Map<String, List<NotifyListener>> notifyListener = new ConcurrentHashMap<>();
 
-
     private RedisTopic<org.jetlinks.lettuce.supports.NotifyReply> replyTopic;
 
     private RedisTopic<ServerNodeInfo> broadcastTopic;
@@ -102,7 +101,8 @@ public class DefaultRedisHaManager implements RedisHaManager {
 
     public CompletionStage<Long> doSend(String server, Notify notify) {
 
-        return plus.getTopic("__ha-manager-notify:".concat(id).concat(":").concat(server))
+        return plus
+                .getTopic("__ha-manager-notify:".concat(id).concat(":").concat(server))
                 .publish(notify);
     }
 
@@ -156,7 +156,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
                         if (value instanceof ServerNodeInfo) {
                             ServerNodeInfo server = ((ServerNodeInfo) value);
                             if (!server.getId().equals(current.getId())) {
-                                //检查节点是否存货
+                                //检查节点是否健在
                                 sendNotifyReply(server.getId(), "ping", "pong", Duration.ofSeconds(10))
                                         .thenAccept(pong -> {
                                             if ("pong".equals(pong)) {
@@ -174,9 +174,9 @@ public class DefaultRedisHaManager implements RedisHaManager {
 
         onNotify("ping", String.class, (Function<String, CompletionStage<?>>) CompletableFuture::completedFuture);
 
-        RedisTopic<Notify> eventTopic = plus.getTopic("__ha-manager-notify:".concat(id).concat(":").concat(current.getId()));
+        RedisTopic<Notify> notifyTopic = plus.getTopic("__ha-manager-notify:".concat(id).concat(":").concat(current.getId()));
 
-        eventTopic.addListener((topic, notify) -> {
+        notifyTopic.addListener((topic, notify) -> {
             handleEvent(notify);
         });
 
@@ -209,7 +209,7 @@ public class DefaultRedisHaManager implements RedisHaManager {
         ScheduledFuture<?> future = plus.getExecutor().scheduleAtFixedRate(this::checkServerAlive, 10, 10, TimeUnit.SECONDS);
         shutdownHooks.add(broadcastTopic::shutdown);
         shutdownHooks.add(replyTopic::shutdown);
-        shutdownHooks.add(eventTopic::shutdown);
+        shutdownHooks.add(notifyTopic::shutdown);
         shutdownHooks.add(() -> future.cancel(false));
     }
 

@@ -128,7 +128,7 @@ public class DefaultLettucePlusTest {
             queue.addAsync("test2").toCompletableFuture().get(2, TimeUnit.SECONDS);
             Assert.assertEquals(reference.get(), "test");
 
-        }finally {
+        } finally {
             queue.clear();
         }
 
@@ -163,18 +163,18 @@ public class DefaultLettucePlusTest {
 
             Assert.assertEquals("test1", redisQueue.poll().toCompletableFuture().get());
 
-            redisQueue.addAll(Arrays.asList("1","2"));
+            redisQueue.addAll(Arrays.asList("1", "2"));
 
             //redis恢复
             addError.set(false);
             redisQueue.addAsync("3");
-            CountDownLatch latch=new CountDownLatch(3);
+            CountDownLatch latch = new CountDownLatch(3);
 
-            redisQueue.poll(data-> latch.countDown());
+            redisQueue.poll(data -> latch.countDown());
 
-            Assert.assertTrue(latch.await(3,TimeUnit.SECONDS));
+            Assert.assertTrue(latch.await(3, TimeUnit.SECONDS));
 
-        }finally {
+        } finally {
             redisQueue.clear();
         }
 
@@ -247,14 +247,17 @@ public class DefaultLettucePlusTest {
             //测试发送无回复通知
             {
                 CountDownLatch notifyCountDown = new CountDownLatch(1000);
+                CountDownLatch sendCountdown = new CountDownLatch(1000);
                 server1.onNotify("test-event", String.class, data -> {
                     notifyCountDown.countDown();
                 });
                 long time = System.currentTimeMillis();
                 for (int i = 0; i < 1000; i++) {
-                    server2.sendNotify("server1", "test-event", "1234");
+                    server2.sendNotify("server1", "test-event", "1234")
+                            .thenRun(sendCountdown::countDown);
                 }
-
+                Assert.assertTrue(sendCountdown.await(30, TimeUnit.SECONDS));
+                System.out.println("1k 通知耗时:" + (System.currentTimeMillis() - time));
                 Assert.assertTrue(notifyCountDown.await(30, TimeUnit.SECONDS));
                 System.out.println("1k 完成通知耗时:" + (System.currentTimeMillis() - time));
             }
