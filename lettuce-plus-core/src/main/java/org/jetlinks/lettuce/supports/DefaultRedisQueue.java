@@ -3,11 +3,6 @@ package org.jetlinks.lettuce.supports;
 import io.lettuce.core.ScriptOutputType;
 import io.lettuce.core.api.async.RedisAsyncCommands;
 import io.lettuce.core.codec.RedisCodec;
-import io.lettuce.core.output.IntegerOutput;
-import io.lettuce.core.protocol.AsyncCommand;
-import io.lettuce.core.protocol.Command;
-import io.lettuce.core.protocol.CommandArgs;
-import io.lettuce.core.protocol.ProtocolKeyword;
 import lombok.extern.slf4j.Slf4j;
 import org.jetlinks.lettuce.LettucePlus;
 import org.jetlinks.lettuce.RedisQueue;
@@ -18,7 +13,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Queue;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -69,6 +67,9 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
 
     @Override
     public CompletionStage<T> poll() {
+        if (!localBuffer.isEmpty()) {
+            return CompletableFuture.completedFuture(localBuffer.poll());
+        }
         return plus.getRedisAsync(codec)
                 .thenCompose(redis -> redis.lpop(id));
     }
@@ -137,8 +138,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
     }
 
     public CompletionStage<Boolean> addAll(Collection<T> data) {
-        return plus.getRedisAsync(codec)
-                .thenCompose(redis -> redis.lpush(id, (T[]) data.toArray()))
+        return doAdd(data)
                 .whenComplete((len, error) -> {
                     if (error != null) {
                         log.error("add queue [{}] data error", id, error);
@@ -152,7 +152,26 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                     } else {
                         flushTopic.publish(id);
                     }
-                }).thenApply(len -> true);
+                });
+    }
+
+    protected CompletionStage<Boolean> doAdd(Collection<T> data){
+        return plus.getRedisAsync(codec)
+                .thenCompose(redis -> redis.lpush(id, (T[]) data.toArray()))
+                .thenApply(len -> true);
+    }
+    protected CompletionStage<Boolean> doAdd(T data) {
+        return plus.<Long>eval("" +
+                "local val = redis.call('lpush',KEYS[1],ARGV[1]);" +
+                "redis.call('publish',KEYS[2],KEYS[1]);" +
+                "return val;", ScriptOutputType.INTEGER, new String[]{id, "_queue_flush:".concat(id)}, data)
+                .thenApply(len -> true);
+    }
+
+    @Override
+    public CompletionStage<Void> clear() {
+        return plus.getRedisAsync(plus.getDefaultCodec())
+                .thenAccept(redis-> redis.del(id));
     }
 
     @Override
@@ -165,10 +184,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
             return CompletableFuture.completedFuture(true);
         }
 
-        return plus.<Long>eval("" +
-                "local val = redis.call('lpush',KEYS[1],ARGV[1]);" +
-                "redis.call('publish',KEYS[2],KEYS[1]);" +
-                "return val;", ScriptOutputType.INTEGER, new String[]{id, "_queue_flush:".concat(id)}, data)
+        return doAdd(data)
                 .whenComplete((len, error) -> {
                     if (error != null) {
                         log.error("add queue [{}] data error", id, error);
@@ -182,7 +198,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                     } else {
                         flushBuffer();
                     }
-                }).thenApply(len -> true);
+                });
     }
 
 }

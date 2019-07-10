@@ -16,4 +16,6 @@ public interface RedisQueue<T> {
 
     CompletionStage<Boolean> addAsync(T data);
 
+    CompletionStage<Void> clear();
+
 }

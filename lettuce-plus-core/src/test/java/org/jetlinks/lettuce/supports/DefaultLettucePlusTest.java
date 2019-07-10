@@ -7,7 +7,13 @@ import org.junit.Before;
 import org.junit.Test;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 public class DefaultLettucePlusTest {
@@ -65,7 +71,7 @@ public class DefaultLettucePlusTest {
 
         //10 个topic 收发10000个消息
         for (int i = 0; i < 10; i++) {
-            RedisTopic<String> topic = plus.getTopic("test"+i);
+            RedisTopic<String> topic = plus.getTopic("test" + i);
 
             CountDownLatch latch = new CountDownLatch(10000);
 
@@ -74,7 +80,7 @@ public class DefaultLettucePlusTest {
             long time = System.currentTimeMillis();
 
             for (int j = 0; j < 10000; j++) {
-                plus2.getTopic("test"+i).publish("test");
+                plus2.getTopic("test" + i).publish("test");
             }
 
             Assert.assertTrue(latch.await(30, TimeUnit.SECONDS));
@@ -82,7 +88,7 @@ public class DefaultLettucePlusTest {
             System.out.println(System.currentTimeMillis() - time);
         }
 
-        CountDownLatch latch=new CountDownLatch(1);
+        CountDownLatch latch = new CountDownLatch(1);
 
         RedisTopic<String> topic = plus.getPatternTopic("test*");
         topic.addListener((channel, data) -> latch.countDown());
@@ -91,13 +97,92 @@ public class DefaultLettucePlusTest {
                 .publish("test")
                 .thenAccept(System.out::println);
 
-       Assert.assertTrue( latch.await(30,TimeUnit.SECONDS));
+        Assert.assertTrue(latch.await(30, TimeUnit.SECONDS));
+
+    }
+
+
+    @Test
+    @SneakyThrows
+    public void testQueue() {
+        RedisQueue<String> queue = plus.getQueue(UUID.randomUUID().toString());
+        try {
+            Assert.assertTrue(queue.addAll(Arrays.asList("123", "456")).toCompletableFuture().get());
+
+            Assert.assertEquals(queue.poll().toCompletableFuture().get(), "456");
+            Assert.assertEquals(queue.poll().toCompletableFuture().get(), "123");
+
+            CountDownLatch latch = new CountDownLatch(1);
+            AtomicReference<String> reference = new AtomicReference<>();
+
+            Consumer<String> listener = data -> {
+                reference.set(data);
+                latch.countDown();
+            };
+            queue.poll(listener);
+
+            queue.addAsync("test");
+            latch.await(2, TimeUnit.SECONDS);
+
+            queue.removeListener(listener);
+            queue.addAsync("test2").toCompletableFuture().get(2, TimeUnit.SECONDS);
+            Assert.assertEquals(reference.get(), "test");
+
+        }finally {
+            queue.clear();
+        }
+
+        AtomicBoolean addError = new AtomicBoolean();
+        DefaultRedisQueue<String> redisQueue = new DefaultRedisQueue<String>("test-queue", plus, plus.getDefaultCodec()) {
+            @Override
+            protected CompletionStage<Boolean> doAdd(Collection<String> data) {
+                CompletableFuture<Boolean> future = new CompletableFuture<>();
+                if (addError.get()) {
+                    future.completeExceptionally(new RuntimeException());
+                    return future;
+                } else {
+                    return super.doAdd(data);
+                }
+            }
+
+            @Override
+            protected CompletionStage<Boolean> doAdd(String data) {
+                CompletableFuture<Boolean> future = new CompletableFuture<>();
+                if (addError.get()) {
+                    future.completeExceptionally(new RuntimeException());
+                    return future;
+                } else {
+                    return super.doAdd(data);
+                }
+            }
+        };
+        try {
+            //redis失败
+            addError.set(true);
+            redisQueue.addAsync("test1");
+
+            Assert.assertEquals("test1", redisQueue.poll().toCompletableFuture().get());
+
+            redisQueue.addAll(Arrays.asList("1","2"));
+
+            //redis恢复
+            addError.set(false);
+            redisQueue.addAsync("3");
+            CountDownLatch latch=new CountDownLatch(3);
+
+            redisQueue.poll(data-> latch.countDown());
+
+            Assert.assertTrue(latch.await(3,TimeUnit.SECONDS));
+
+        }finally {
+            redisQueue.clear();
+        }
 
     }
 
     @Test
     @SneakyThrows
-    public void testQueue() {
+    public void testQueueBenchmark() {
 
         for (int i = 0; i < 10; i++) {
             RedisQueue<String> queue = plus.getQueue("queue:" + i);
