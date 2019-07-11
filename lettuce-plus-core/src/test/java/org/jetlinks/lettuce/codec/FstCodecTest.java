@@ -5,6 +5,8 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import java.nio.ByteBuffer;
+import java.util.Collections;
+import java.util.HashMap;
 
 public class FstCodecTest {
 
@@ -24,6 +26,25 @@ public class FstCodecTest {
 
             Assert.assertTrue(codec.decodeValue(byteBuffer) instanceof Notify);
 
+        }
+        System.out.println(System.currentTimeMillis() - time);
+
+
+    }
+
+
+    @Test
+    public void testCodecObject(){
+        FstCodec<Object, Object> codec = new FstCodec<>();
+        long time = System.currentTimeMillis();
+        for (int i = 0; i < 100000; i++) {
+            TestEntity entity=new TestEntity();
+            entity.setId("123456");
+            entity.setData(new HashMap<>());
+            entity.setNum(i);
+            entity.setNest(new HashMap<>(Collections.singletonMap("test","test")));
+
+            Assert.assertEquals(entity, codec.decodeValue(codec.encodeValue(entity)));
         }
         System.out.println(System.currentTimeMillis() - time);
 

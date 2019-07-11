@@ -1,5 +1,6 @@
 package org.jetlinks.lettuce.supports;
 
+import io.lettuce.core.api.StatefulRedisConnection;
 import lombok.SneakyThrows;
 import org.jetlinks.lettuce.*;
 import org.junit.Assert;
@@ -189,7 +190,9 @@ public class DefaultLettucePlusTest {
 
 
             CountDownLatch latch = new CountDownLatch(10000);
-            queue.poll(data -> latch.countDown());
+            queue.poll(data -> {
+                latch.countDown();
+            });
 
             long time = System.currentTimeMillis();
 
@@ -200,6 +203,51 @@ public class DefaultLettucePlusTest {
             latch.await(30, TimeUnit.SECONDS);
             System.out.println(System.currentTimeMillis() - time);
         }
+    }
+
+    @Test
+    @SneakyThrows
+    public void testSet() {
+        CountDownLatch latch = new CountDownLatch(10000);
+        long time = System.currentTimeMillis();
+
+        for (int i = 0; i < 10000; i++) {
+            plus.getConnection()
+                    .thenApply(StatefulRedisConnection::async)
+                    .thenCompose(redis -> redis.hset("test123", "123", "123123"))
+                    .whenComplete((aBoolean, throwable) -> {
+                        if (throwable != null) {
+                            throwable.printStackTrace();
+                        }
+                        latch.countDown();
+                    });
+        }
+
+        latch.await(30, TimeUnit.SECONDS);
+        System.out.println(System.currentTimeMillis() - time);
+        time = System.currentTimeMillis();
+        ExecutorService service = Executors.newFixedThreadPool(32);
+
+        CountDownLatch latch2 = new CountDownLatch(10000);
+        for (int i = 0; i < 10000; i++) {
+            CompletableFuture.runAsync(() -> {
+                try {
+                    plus.getConnection()
+                            .thenApply(StatefulRedisConnection::async)
+                            .thenCompose(redis -> redis.hget("test123", "123"))
+                            .toCompletableFuture()
+                            .get(10, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                } finally {
+                    latch2.countDown();
+                }
+            }, service);
+
+        }
+        Assert.assertTrue(latch2.await(30, TimeUnit.SECONDS));
+        service.shutdown();
+        System.out.println(System.currentTimeMillis() - time);
     }
 
     @Test

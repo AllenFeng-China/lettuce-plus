@@ -67,7 +67,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
         return plus;
     }
 
-    private void initSentinel(RedisURI redisURI) {
+    public void initSentinel(RedisURI redisURI) {
         log.info("init redis sentinel connection pool : {}", poolSize);
         {
             RedisSentinelCommands<String, String> connection = redisClient.connectSentinel(redisURI).sync();
@@ -90,7 +90,7 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
         }
     }
 
-    private void initStandalone() {
+    public void initStandalone() {
         log.info("init redis connection pool : {}", poolSize);
         for (int i = 0; i < poolSize; i++) {
             StatefulRedisConnection<?, ?> connection = redisClient.connect(getDefaultCodec());
@@ -107,27 +107,13 @@ public class DefaultLettucePlus extends AbstractLettucePlus {
         }
     }
 
-    protected void init() {
+    public void init() {
         super.init();
     }
 
     @Override
     public <K, V> CompletionStage<StatefulRedisConnection<K, V>> getConnection() {
-        CompletableFuture<StatefulRedisConnection<K, V>> future = new CompletableFuture<>();
-
-        if (connections.isEmpty()) {
-            future.completeExceptionally(new IllegalStateException("connnection closed"));
-            return future;
-        }
-        StatefulRedisConnection<K, V> connection = (StatefulRedisConnection) connections.get(random.nextInt(connections.size()));
-        if (connection.isOpen()) {
-            future.complete(connection);
-        } else {
-            connections.remove(connection);
-            return getConnection();
-        }
-
-        return future;
+        return CompletableFuture.completedFuture((StatefulRedisConnection) connections.get(random.nextInt(connections.size())));
     }
 
     protected <K, V> CompletionStage<StatefulRedisPubSubConnection<K, V>> getPubSubConnect() {

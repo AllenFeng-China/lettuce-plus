@@ -81,10 +81,8 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
         commands.lpop(id)
                 .whenComplete((data, error) -> {
                     if (data != null) {
-                        for (Consumer<T> listener : listeners) {
-                            listener.accept(data);
-                        }
-                        doFlush(commands);
+                        runListener(data,()-> doFlush(commands));
+
                     }
                 });
     }
@@ -143,9 +141,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                     if (error != null) {
                         log.error("add queue [{}] data error", id, error);
                         if (!listeners.isEmpty()) {
-                            for (Consumer<T> listener : listeners) {
-                                data.forEach(listener);
-                            }
+                            runListener(data);
                         } else {
                             localBuffer.addAll(data);
                         }
@@ -155,11 +151,12 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                 });
     }
 
-    protected CompletionStage<Boolean> doAdd(Collection<T> data){
+    protected CompletionStage<Boolean> doAdd(Collection<T> data) {
         return plus.getRedisAsync(codec)
                 .thenCompose(redis -> redis.lpush(id, (T[]) data.toArray()))
                 .thenApply(len -> true);
     }
+
     protected CompletionStage<Boolean> doAdd(T data) {
         return plus.<Long>eval("" +
                 "local val = redis.call('lpush',KEYS[1],ARGV[1]);" +
@@ -171,16 +168,14 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
     @Override
     public CompletionStage<Void> clear() {
         return plus.getRedisAsync(plus.getDefaultCodec())
-                .thenAccept(redis-> redis.del(id));
+                .thenAccept(redis -> redis.del(id));
     }
 
     @Override
     public CompletionStage<Boolean> addAsync(T data) {
 
         if (!listeners.isEmpty() && Math.random() < localConsumerPoint) {
-            for (Consumer<T> listener : listeners) {
-                listener.accept(data);
-            }
+            runListener(data);
             return CompletableFuture.completedFuture(true);
         }
 
@@ -199,6 +194,29 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                         flushBuffer();
                     }
                 });
+    }
+
+    public void runListener(Collection<T> data) {
+        plus.getExecutor().execute(() -> {
+            for (Consumer<T> listener : listeners) {
+                data.forEach(listener);
+            }
+        });
+    }
+
+    public void runListener(T data) {
+        runListener(data, null);
+    }
+
+    public void runListener(T data, Runnable runnable) {
+        plus.getExecutor().execute(() -> {
+            for (Consumer<T> listener : listeners) {
+                listener.accept(data);
+            }
+            if (runnable != null) {
+                runnable.run();
+            }
+        });
     }
 
 }

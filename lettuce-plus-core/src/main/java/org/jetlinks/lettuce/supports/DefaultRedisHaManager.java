@@ -188,12 +188,12 @@ public class DefaultRedisHaManager implements RedisHaManager {
         this.replyTopic.addListener((topic, event) ->
                 Optional.ofNullable(replyMap.remove(event.getNotifyId()))
                         .ifPresent(notifyReply -> {
-                            if (event.isSuccess()) {
-                                notifyReply.future.complete(event.getPayload());
-                            } else {
-                                notifyReply.future.completeExceptionally(new RuntimeException(event.getErrorMessage()));
-                            }
-                        }));
+            if (event.isSuccess()) {
+                notifyReply.future.complete(event.getPayload());
+            } else {
+                notifyReply.future.completeExceptionally(new RuntimeException(event.getErrorMessage()));
+            }
+        }));
 
         this.broadcastTopic.addListener((topic, node) -> {
             if (node.getId().equals(getCurrentNode().getId())) {
@@ -261,8 +261,6 @@ public class DefaultRedisHaManager implements RedisHaManager {
                 .stream()
                 .filter(server -> !server.getId().equals(current.getId()))
                 .forEach(this::doPing);
-        TimeoutException exception = new TimeoutException();
-        exception.setStackTrace(Thread.currentThread().getStackTrace());
         //检查超时
         replyMap.entrySet()
                 .stream()
