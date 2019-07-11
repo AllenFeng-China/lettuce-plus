@@ -68,6 +68,8 @@ public class LettuceUserTokenManager implements UserTokenManager {
                             // UserToken serializable= userToken.toSerializable();
                             publishEvent(new UserTokenChangedEvent(userToken, userToken));
                         }));
+        //没5分钟检查一次token有效性
+        plus.getExecutor().scheduleAtFixedRate(this::checkExpiredToken, 2, 5, TimeUnit.MINUTES);
 
     }
 
@@ -180,13 +182,14 @@ public class LettuceUserTokenManager implements UserTokenManager {
     public void allLoggedUser(Consumer<UserToken> consumer) {
         String cursor = "0";
         ScanArgs args = ScanArgs.Builder
-                .matches(redisPrefix.concat("*"))
+                .matches(redisPrefix.concat(":user-token:*"))
                 .limit(1000);
         while (true) {
             KeyScanCursor<String> scanCursor = this.<String, Object>getRedis()
                     .sync()
                     .scan(ScanCursor.of(cursor), args);
             for (String key : scanCursor.getKeys()) {
+                key = key.substring(redisPrefix.concat(":user-token:*").length() - 1);
                 consumer.accept(getByToken(key));
             }
             if (scanCursor.isFinished() || scanCursor.getKeys().isEmpty() || "0".equals(scanCursor.getCursor())) {
@@ -319,7 +322,16 @@ public class LettuceUserTokenManager implements UserTokenManager {
 
     @Override
     public void checkExpiredToken() {
-
+        tokenStore.values().parallelStream()
+                .map(SoftReference::get)
+                .filter(Objects::nonNull)
+                .forEach(token -> token.isAliveAsync()
+                        .thenAccept(alive -> {
+                            if (!alive) {
+                                tokenStore.remove(token.getToken());
+                                token.changeState(TokenState.expired);
+                            }
+                        }));
     }
 
     public void changeTokenState(LettuceUserToken token, TokenState state) {
@@ -329,16 +341,4 @@ public class LettuceUserTokenManager implements UserTokenManager {
         token.changeState(state);
     }
 
-    private LettuceUserToken checkToken(LettuceUserToken detail) {
-        if (null == detail) {
-            return null;
-        }
-        if (detail.isAlive()) {
-            return detail;
-        }
-        detail.remove();
-        tokenStore.remove(detail.getToken());
-
-        return null;
-    }
 }

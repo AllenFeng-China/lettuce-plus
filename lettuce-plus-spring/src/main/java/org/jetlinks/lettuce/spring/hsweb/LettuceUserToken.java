@@ -15,6 +15,7 @@ import org.jetlinks.lettuce.codec.StringCodec;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -101,16 +102,8 @@ public class LettuceUserToken implements UserToken {
     @Override
     public TokenState getState() {
 
-        TokenState state = Optional.<TokenState>ofNullable(tryGetFromLocalCache("state"))
+        return Optional.<TokenState>ofNullable(tryGetFromLocalCache("state"))
                 .orElse(TokenState.expired);
-        if (state == TokenState.normal) {
-            if (!isAlive()) {
-                localCache.put("state", TokenState.expired);
-
-                return TokenState.expired;
-            }
-        }
-        return state;
     }
 
     @Override
@@ -156,14 +149,18 @@ public class LettuceUserToken implements UserToken {
         localCache.remove("state");
     }
 
-    boolean isAlive() {
-        return this.getRedis().sync().exists(redisKey) > 0;
+    CompletionStage<Boolean> isAliveAsync() {
+        return this.getRedis()
+                .async()
+                .exists(redisKey)
+                .thenApply(l -> l > 0);
     }
 
     public void changeState(TokenState state) {
         localCache.put("state", state);
         String script = "" +
                 "if redis.call('exists', KEYS[1]) == 0 then " +
+                "redis.call('publish',KEYS[3],ARGV[2]);" +
                 "return 0;" +
                 "else " +
                 "redis.call('hset', KEYS[1], KEYS[2], ARGV[1]);" +

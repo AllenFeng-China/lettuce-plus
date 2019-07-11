@@ -93,6 +93,8 @@ public class LettuceUserTokenManagerTest {
         Thread.sleep(100);
 
         Assert.assertEquals(token.getState(), TokenState.deny);
+        Assert.assertTrue(tokenManager.allLoggedUser()
+                .stream().anyMatch(_token->"admin".equals(_token.getUserId())));
 
         tokenManager.signOutByUserId("admin");
 
@@ -108,7 +110,10 @@ public class LettuceUserTokenManagerTest {
     public void testExpire() {
         UserToken userToken = tokenManager.signIn("test-token-expire", "test", "admin", 1000);
         Assert.assertTrue(userToken.isNormal());
+
         Thread.sleep(1200);
+        tokenManager.checkExpiredToken();
+        Thread.sleep(1000);
         Assert.assertTrue(userToken.isExpired());
     }
 
