@@ -81,7 +81,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
         commands.lpop(id)
                 .whenComplete((data, error) -> {
                     if (data != null) {
-                        runListener(data,()-> doFlush(commands));
+                        runListener(data, () -> doFlush(commands));
 
                     }
                 });
@@ -157,16 +157,21 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                 .thenApply(len -> true);
     }
 
+    protected <K, V> RedisCodec<K, V> getCodec() {
+        return ((RedisCodec) codec);
+    }
+
     protected CompletionStage<Boolean> doAdd(T data) {
-        return plus.<Long>eval("" +
+        return plus.<String,T,Long>eval("" +
                 "local val = redis.call('lpush',KEYS[1],ARGV[1]);" +
                 "redis.call('publish',KEYS[2],KEYS[1]);" +
-                "return val;", ScriptOutputType.INTEGER, new String[]{id, "_queue_flush:".concat(id)}, data)
+                "return val;", ScriptOutputType.INTEGER, codec, new String[]{id, "_queue_flush:".concat(id)}, data)
                 .thenApply(len -> true);
     }
 
     @Override
     public CompletionStage<Void> clear() {
+        listeners.clear();
         return plus.getRedisAsync(plus.getDefaultCodec())
                 .thenAccept(redis -> redis.del(id));
     }
