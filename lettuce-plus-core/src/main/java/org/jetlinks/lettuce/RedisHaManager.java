@@ -26,6 +26,8 @@ public interface RedisHaManager {
 
     <T> void onNotify(String address, Class<T> type, Function<T, CompletionStage<?>> listener);
 
+    void startup(ServerNodeInfo current,long delay);
+
     void startup(ServerNodeInfo current);
 
     void shutdown();

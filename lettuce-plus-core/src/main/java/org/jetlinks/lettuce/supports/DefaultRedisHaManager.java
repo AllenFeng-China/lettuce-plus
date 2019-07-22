@@ -137,6 +137,13 @@ public class DefaultRedisHaManager implements RedisHaManager {
 
     private volatile boolean running = false;
 
+
+    @SuppressWarnings("all")
+    @Override
+    public void startup(ServerNodeInfo current, long delay) {
+        plus.getExecutor().schedule(() -> startup(current), delay, TimeUnit.MINUTES);
+    }
+
     @Override
     @SuppressWarnings("all")
     public synchronized void startup(ServerNodeInfo current) {
@@ -188,12 +195,12 @@ public class DefaultRedisHaManager implements RedisHaManager {
         this.replyTopic.addListener((topic, event) ->
                 Optional.ofNullable(replyMap.remove(event.getNotifyId()))
                         .ifPresent(notifyReply -> {
-            if (event.isSuccess()) {
-                notifyReply.future.complete(event.getPayload());
-            } else {
-                notifyReply.future.completeExceptionally(new RuntimeException(event.getErrorMessage()));
-            }
-        }));
+                            if (event.isSuccess()) {
+                                notifyReply.future.complete(event.getPayload());
+                            } else {
+                                notifyReply.future.completeExceptionally(new RuntimeException(event.getErrorMessage()));
+                            }
+                        }));
 
         this.broadcastTopic.addListener((topic, node) -> {
             if (node.getId().equals(getCurrentNode().getId())) {

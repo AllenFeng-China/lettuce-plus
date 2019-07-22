@@ -44,7 +44,6 @@ public interface LettucePlus {
 
     <T> RedisQueue<T> getQueue(RedisCodec<String, T> codec, String id);
 
-
     <K, V> RedisLocalCacheMap<K, V> getLocalCacheMap(String id);
 
     ScheduledExecutorService getExecutor();
