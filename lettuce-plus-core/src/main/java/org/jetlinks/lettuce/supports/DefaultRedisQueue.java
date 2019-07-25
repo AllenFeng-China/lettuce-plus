@@ -33,7 +33,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
 
     private Queue<T> localBuffer = new ConcurrentLinkedQueue<>();
 
-    private double localConsumerPoint = Double.valueOf(System.getProperty("lettuce.plus.queue.local.consumer.point", "0.5"));
+    private float localConsumerPoint = Float.parseFloat(System.getProperty("lettuce.plus.queue.local.consumer.point", "0.5"));
 
     private RedisCodec<String, T> codec;
 
@@ -42,6 +42,11 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
         this.plus = plus;
         this.codec = codec;
         flushTopic = plus.getTopic(StringCodec.getInstance(), "_queue_flush:".concat(id));
+    }
+
+    @Override
+    public void setLocalConsumerPoint(float localConsumerPoint) {
+        this.localConsumerPoint = localConsumerPoint;
     }
 
     private AtomicLong flushCounter = new AtomicLong();
@@ -136,6 +141,10 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
     }
 
     public CompletionStage<Boolean> addAll(Collection<T> data) {
+        if (!listeners.isEmpty() && Math.random() < localConsumerPoint) {
+            runListener(data);
+            return CompletableFuture.completedFuture(true);
+        }
         return doAdd(data)
                 .whenComplete((len, error) -> {
                     if (error != null) {
@@ -162,7 +171,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
     }
 
     protected CompletionStage<Boolean> doAdd(T data) {
-        return plus.<String,T,Long>eval("" +
+        return plus.<String, T, Long>eval("" +
                 "local val = redis.call('lpush',KEYS[1],ARGV[1]);" +
                 "redis.call('publish',KEYS[2],KEYS[1]);" +
                 "return val;", ScriptOutputType.INTEGER, codec, new String[]{id, "_queue_flush:".concat(id)}, data)
