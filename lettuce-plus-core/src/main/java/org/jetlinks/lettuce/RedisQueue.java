@@ -3,6 +3,7 @@ package org.jetlinks.lettuce;
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 
 /**
@@ -19,6 +20,9 @@ public interface RedisQueue<T> {
      * @param point 概率, 0到1之间到浮点数
      */
     void setLocalConsumerPoint(float point);
+
+
+    void setExecutor(Executor executor);
 
     /**
      * 持续消费数据,当队列中有数据传入后,将触发监听器

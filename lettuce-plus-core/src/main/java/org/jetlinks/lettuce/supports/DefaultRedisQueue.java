@@ -13,10 +13,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Queue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -37,11 +34,20 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
 
     private RedisCodec<String, T> codec;
 
+    private volatile Executor executor;
+
+
     public DefaultRedisQueue(String id, LettucePlus plus, RedisCodec<String, T> codec) {
         this.id = id;
         this.plus = plus;
         this.codec = codec;
         flushTopic = plus.getTopic(StringCodec.getInstance(), "_queue_flush:".concat(id));
+        executor = plus.getExecutor();
+    }
+
+    @Override
+    public void setExecutor(Executor executor) {
+        this.executor = executor;
     }
 
     @Override
@@ -86,7 +92,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
         commands.lpop(id)
                 .whenComplete((data, error) -> {
                     if (data != null) {
-                        runListener(data, () -> doFlush(commands));
+                        runListener(data, () -> doFlush(commands), this.executor);
 
                     }
                 });
@@ -142,7 +148,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
 
     public CompletionStage<Boolean> addAll(Collection<T> data) {
         if (!listeners.isEmpty() && Math.random() < localConsumerPoint) {
-            runListener(data);
+            runListener(data, Runnable::run);
             return CompletableFuture.completedFuture(true);
         }
         return doAdd(data)
@@ -150,7 +156,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                     if (error != null) {
                         log.error("add queue [{}] data error", id, error);
                         if (!listeners.isEmpty()) {
-                            runListener(data);
+                            runListener(data, this.executor);
                         } else {
                             localBuffer.addAll(data);
                         }
@@ -189,7 +195,7 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
     public CompletionStage<Boolean> addAsync(T data) {
 
         if (!listeners.isEmpty() && Math.random() < localConsumerPoint) {
-            runListener(data);
+            runListener(data, Runnable::run);
             return CompletableFuture.completedFuture(true);
         }
 
@@ -210,20 +216,20 @@ public class DefaultRedisQueue<T> implements RedisQueue<T> {
                 });
     }
 
-    public void runListener(Collection<T> data) {
-        plus.getExecutor().execute(() -> {
+    public void runListener(Collection<T> data, Executor executor) {
+        executor.execute(() -> {
             for (Consumer<T> listener : listeners) {
                 data.forEach(listener);
             }
         });
     }
 
-    public void runListener(T data) {
-        runListener(data, null);
+    public void runListener(T data, Executor executor) {
+        runListener(data, null, executor);
     }
 
-    public void runListener(T data, Runnable runnable) {
-        plus.getExecutor().execute(() -> {
+    public void runListener(T data, Runnable runnable, Executor executor) {
+        executor.execute(() -> {
             for (Consumer<T> listener : listeners) {
                 listener.accept(data);
             }
